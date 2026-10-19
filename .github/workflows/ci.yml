@@ -1,0 +1,37 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Format, vet, and tests
+        run: |
+          test -z "$(gofmt -l cmd internal)"
+          go vet ./...
+          go test -race -coverprofile=coverage.out ./...
+          go tool cover -func=coverage.out
+      - name: Installer tests
+        run: |
+          bash -n scripts/*.sh
+          shellcheck scripts/*.sh
+          bash scripts/test-install.sh
+      - name: Linux systemd smoke test
+        run: |
+          CGO_ENABLED=0 go build -o "$RUNNER_TEMP/servctl" ./cmd/servctl
+          sudo bash scripts/test-systemd.sh "$RUNNER_TEMP/servctl"
+      - name: Cross build
+        run: |
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -o "$RUNNER_TEMP/servctl-$arch" ./cmd/servctl
+          done

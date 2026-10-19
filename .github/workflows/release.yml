@@ -1,0 +1,51 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Validate and test
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test -z "$(gofmt -l cmd internal)"
+          go vet ./...
+          go test -race ./...
+          shellcheck scripts/*.sh
+          bash scripts/test-install.sh
+          CGO_ENABLED=0 go build -o "$RUNNER_TEMP/servctl" ./cmd/servctl
+          sudo bash scripts/test-systemd.sh "$RUNNER_TEMP/servctl"
+      - name: Build release assets
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            mkdir -p "dist/$arch"
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath \
+              -ldflags="-s -w -X main.version=$VERSION" \
+              -o "dist/$arch/servctl" ./cmd/servctl
+            tar -czf "dist/servctl_linux_$arch.tar.gz" -C "dist/$arch" servctl
+          done
+          cd dist
+          sha256sum servctl_linux_*.tar.gz > checksums.txt
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          gh release create "$VERSION" \
+            dist/servctl_linux_amd64.tar.gz dist/servctl_linux_arm64.tar.gz dist/checksums.txt \
+            --verify-tag --title "servctl $VERSION" --generate-notes
