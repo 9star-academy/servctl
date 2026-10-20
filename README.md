@@ -42,21 +42,21 @@ servctl --help
 
 如果提示“仓库尚未发布正式 Release”（旧脚本提示“无法解析最新 Release”），请先检查 [Releases](https://github.com/9star-academy/servctl/releases)。源码已推送到 `main` 不代表二进制已发布；需要按本文末尾的发布步骤创建正式版本，并确认包含 `servctl_linux_amd64.tar.gz`、`servctl_linux_arm64.tar.gz` 和 `checksums.txt`。如果发布未完成，请检查 [Actions](https://github.com/9star-academy/servctl/actions) 的失败日志；修复后再发布。
 
-## 示例：ubuntu 用户部署 admin
+## 示例：ubuntu 用户部署应用服务
 
-假设你已上传 **Linux 可执行文件** 到 `/www/wwwroot/admin/admin`，配置文件位于该项目目录，程序配置为监听 8200：
+假设你已上传 **Linux 可执行文件** 到 `/www/wwwroot/myapp/myapp`，配置文件位于该项目目录，程序配置为监听 8200：
 
 ```bash
 # 上传后若没有执行权限，需要先设置
-chmod +x /www/wwwroot/admin/admin
+chmod +x /www/wwwroot/myapp/myapp
 
-sudo servctl install admin \
-  --exec /www/wwwroot/admin/admin \
-  --workdir /www/wwwroot/admin \
+sudo servctl install myapp \
+  --exec /www/wwwroot/myapp/myapp \
+  --workdir /www/wwwroot/myapp \
   --user ubuntu
 ```
 
-- `admin` 是自定义服务名，生成 `/etc/systemd/system/admin.service`，不必与程序文件名相同。
+- `myapp` 是自定义服务名，生成 `/etc/systemd/system/myapp.service`，不必与程序文件名相同。
 - `--exec` 是实际启动的程序。
 - `--workdir` 是读取相对配置/写入相对文件的工作目录，默认当前目录。
 - 工作目录支持中间的空格和特殊字符，但最后一级目录名不能以空格结尾；部分 systemd 版本会丢失末尾空格，工具会在创建服务前明确拒绝此类目录。
@@ -70,10 +70,10 @@ sudo servctl install admin \
 **进程检查不是业务健康检查。** 安装成功后仍需验证你的端口或健康接口；晚于观察窗口发生的错误请查日志。
 
 ```bash
-systemctl is-active admin       # 预期 active
-systemctl is-enabled admin      # 预期 enabled
+systemctl is-active myapp       # 预期 active
+systemctl is-enabled myapp      # 预期 enabled
 sudo ss -ltnp 'sport = :8200'    # 确认监听进程
-sudo servctl logs admin
+sudo servctl logs myapp
 ```
 
 8200 由应用配置决定，servctl 不配置端口、Nginx、DNS、安全组或防火墙，也不会停止已有的端口占用者。
@@ -81,9 +81,9 @@ sudo servctl logs admin
 如果应用支持通过参数设置端口，将应用参数写在 `--` 后：
 
 ```bash
-sudo servctl install admin \
-  --exec /www/wwwroot/admin/admin \
-  --workdir /www/wwwroot/admin \
+sudo servctl install myapp \
+  --exec /www/wwwroot/myapp/myapp \
+  --workdir /www/wwwroot/myapp \
   --user ubuntu \
   -- --port 8200
 ```
@@ -93,17 +93,17 @@ sudo servctl install admin \
 ## 日常管理
 
 ```bash
-servctl status admin
-sudo servctl logs admin            # 最近 50 行
-sudo servctl logs admin --follow   # 持续查看，Ctrl-C 退出
-sudo servctl restart admin
-sudo servctl stop admin
-sudo servctl start admin
-sudo servctl uninstall admin
+servctl status myapp
+sudo servctl logs myapp            # 最近 50 行
+sudo servctl logs myapp --follow   # 持续查看，Ctrl-C 退出
+sudo servctl restart myapp
+sudo servctl stop myapp
+sudo servctl start myapp
+sudo servctl uninstall myapp
 ```
 
 - `stop` 只停止当前运行，保留开机自启；`start` 不修改自启设置。
-- `Restart=on-failure`：异常退出后等待 3 秒重试，60 秒内最多启动 5 次。正常退出、手动停止不会自动重启；触发限流后修复问题，再执行 `sudo systemctl reset-failed admin` 和 `sudo servctl start admin`。
+- `Restart=on-failure`：异常退出后等待 3 秒重试，60 秒内最多启动 5 次。正常退出、手动停止不会自动重启；触发限流后修复问题，再执行 `sudo systemctl reset-failed myapp` 和 `sudo servctl start myapp`。
 - `status` 对停止/失败的服务保留非零退出码；查看日志的权限由系统控制，权限不足请加 `sudo`。
 - 同名服务一律拒绝覆盖，包括系统已有服务、其他工具创建的服务和被 mask 的服务。
 - 管理命令只接受 `/etc/systemd/system/` 中带 servctl 标记的普通 unit 文件，拒绝符号链接和非托管服务。
