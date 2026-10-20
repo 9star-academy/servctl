@@ -193,3 +193,5 @@ checksums.txt
 ```
 
 版本由 tag 注入 `servctl --version`。待 GitHub Release 成功且 `main` 分支包含安装脚本后，一键安装链接即可使用。Release 失败时先查看 Actions 日志，不要把本地构建通过视为已经发布。
+
+ReedTang666 ♥️ you
