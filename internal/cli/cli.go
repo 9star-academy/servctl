@@ -24,10 +24,10 @@ const help = `servctl — 一条命令注册 systemd 服务
   servctl --version
 
 示例:
-  sudo servctl install admin --exec /www/wwwroot/admin/admin --workdir /www/wwwroot/admin --user ubuntu
-  sudo servctl install admin --exec ./admin --user ubuntu -- --port 8200
-  servctl status admin
-  sudo servctl logs admin --follow
+  sudo servctl install myapp --exec /www/wwwroot/myapp/myapp --workdir /www/wwwroot/myapp --user ubuntu
+  sudo servctl install myapp --exec ./myapp --user ubuntu -- --port 8200
+  servctl status myapp
+  sudo servctl logs myapp --follow
 
 NAME 是服务名，不带 .service；--user 必填，必须是现有用户。
 --exec 相对路径和默认工作目录均以执行命令时的目录为准。
