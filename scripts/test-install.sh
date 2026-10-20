@@ -45,7 +45,7 @@ done
 [ "${TEST_DOWNLOAD_FAIL:-0}" = 0 ] || exit 22
 case "$url" in
  https://github.com/9star-academy/servctl/releases/latest)
-  printf 'https://github.com/9star-academy/servctl/releases/tag/v0.1.0';;
+  printf '%s' "${TEST_RELEASE_URL:-https://github.com/9star-academy/servctl/releases/tag/v0.1.0}";;
  https://github.com/9star-academy/servctl/releases/download/v0.1.0/*)
   cp "$SERVCTL_FIXTURE/release/${url##*/}" "$output";;
  *) echo "Unexpected download: $url" >&2; exit 1;;
@@ -70,6 +70,11 @@ bash "$root/scripts/install.sh"
 TEST_ARCH=aarch64 bash "$root/scripts/install.sh" v0.1.0
 [[ $("$fixture/target/servctl" --version) == 'servctl v0.1.0' ]]
 printf 'keep-existing' > "$fixture/target/servctl"
+TEST_RELEASE_URL=https://github.com/9star-academy/servctl/releases expect_fail
+grep -q '尚未发布正式 Release' "$fixture/output"
+grep -q 'checksums.txt' "$fixture/output"
+TEST_RELEASE_URL=https://github.com/unexpected/releases/tag/v0.1.0 expect_fail
+grep -q '无法解析最新 Release' "$fixture/output"
 TEST_OS=Darwin expect_fail
 TEST_ARCH=riscv64 expect_fail
 TEST_UID=1000 expect_fail

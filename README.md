@@ -40,6 +40,8 @@ servctl --help
 
 如需自定义工具安装目录，可用 `sudo env SERVCTL_INSTALL_DIR=/opt/bin bash /tmp/servctl-install.sh`；需要自行将该目录加入 PATH。再次运行安装脚本会更新 CLI，不重启或修改已经注册的业务服务。
 
+如果提示“仓库尚未发布正式 Release”（旧脚本提示“无法解析最新 Release”），请先检查 [Releases](https://github.com/9star-academy/servctl/releases)。源码已推送到 `main` 不代表二进制已发布；需要按本文末尾的发布步骤创建正式版本，并确认包含 `servctl_linux_amd64.tar.gz`、`servctl_linux_arm64.tar.gz` 和 `checksums.txt`。如果发布未完成，请检查 [Actions](https://github.com/9star-academy/servctl/actions) 的失败日志；修复后再发布。
+
 ## 示例：ubuntu 用户部署 admin
 
 假设你已上传 **Linux 可执行文件** 到 `/www/wwwroot/admin/admin`，配置文件位于该项目目录，程序配置为监听 8200：

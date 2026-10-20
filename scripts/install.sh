@@ -23,6 +23,9 @@ download() {
 }
 if [[ $version == latest ]]; then
   resolved=$(download -o /dev/null -w '%{url_effective}' "$repo/releases/latest") || die '找不到最新 Release；请确认仓库已发布版本，且服务器能访问 GitHub。'
+  if [[ $resolved == "$repo/releases" || $resolved == "$repo/releases/" ]]; then
+    die "仓库尚未发布正式 Release；仅上传源码不能在线安装。请先发布包含 servctl_linux_${arch}.tar.gz 和 checksums.txt 的正式版本：$repo/releases"
+  fi
   [[ $resolved == "$repo/releases/tag/"* ]] || die '无法解析最新 Release。'
   version=${resolved##*/}
 fi
