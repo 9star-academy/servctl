@@ -42,6 +42,11 @@ func (c Config) Validate() error {
 			return fmt.Errorf("%s必须是无控制字符的绝对路径", label)
 		}
 	}
+	// systemd 255 strips trailing whitespace when passing WorkingDirectory to
+	// its executor. A '/.' suffix is normalized away before that handoff.
+	if strings.HasSuffix(filepath.Clean(c.WorkDir), " ") {
+		return fmt.Errorf("工作目录末尾不能是空格：systemd 可能丢失末尾空格，导致服务启动失败")
+	}
 	info, err := os.Stat(c.Executable)
 	if err != nil {
 		return fmt.Errorf("读取程序: %w", err)
@@ -85,7 +90,7 @@ func (c Config) Render() ([]byte, error) {
 	}
 	// ':' disables systemd environment substitution. Percent specifiers are
 	// escaped separately. WorkingDirectory is a scalar path, not a quoted word;
-	// '/.' preserves a directory ending in whitespace or a backslash.
+	// '/.' keeps a final backslash from becoming a unit line continuation.
 	return []byte(fmt.Sprintf(`%s[Unit]
 Description=servctl service %s
 After=network.target

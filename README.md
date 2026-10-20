@@ -59,6 +59,7 @@ sudo servctl install admin \
 - `admin` 是自定义服务名，生成 `/etc/systemd/system/admin.service`，不必与程序文件名相同。
 - `--exec` 是实际启动的程序。
 - `--workdir` 是读取相对配置/写入相对文件的工作目录，默认当前目录。
+- 工作目录支持中间的空格和特殊字符，但最后一级目录名不能以空格结尾；部分 systemd 版本会丢失末尾空格，工具会在创建服务前明确拒绝此类目录。
 - `--user ubuntu` 指定业务进程用户，必填。`sudo` 不会让业务程序自动以 root 运行。
 - 相对程序路径始终相对你执行 servctl 时的目录解析，而不是相对 `--workdir`。
 

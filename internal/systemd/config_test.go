@@ -79,3 +79,29 @@ func TestRenderLiteralArguments(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkingDirectoryTrailingSpace(t *testing.T) {
+	c := testConfig(t)
+	dir := filepath.Join(c.WorkDir, "app ")
+	if err := os.Mkdir(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, suffix := range []string{"", "/", "/."} {
+		t.Run("suffix="+suffix, func(t *testing.T) {
+			c.WorkDir = dir + suffix
+			_, err := c.Render()
+			if err == nil || !strings.Contains(err.Error(), "末尾不能是空格") {
+				t.Fatalf("expected trailing-space directory rejection, got %v", err)
+			}
+		})
+	}
+
+	// A space at the end of an intermediate component is preserved by systemd.
+	c.WorkDir = filepath.Join(dir, "run")
+	if err := os.Mkdir(c.WorkDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Render(); err != nil {
+		t.Fatalf("rejected space in an intermediate component: %v", err)
+	}
+}

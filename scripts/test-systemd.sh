@@ -19,8 +19,10 @@ cleanup() {
 trap cleanup EXIT
 chmod 0755 "$scratch"
 run_user=$(id -un 65534)
-work="$scratch/app % \$ space "
-mkdir "$work"
+# Keep spaces (including a trailing space in an intermediate component), but
+# avoid a trailing space in WorkingDirectory itself: systemd 255 strips it.
+work="$scratch/app % \$ space /run"
+mkdir -p "$work"
 chown "$run_user" "$work"
 program="$work/my % \$ executable"
 cat > "$program" <<'EOF'
@@ -35,6 +37,11 @@ EOF
 chmod 0755 "$program"
 # shellcheck disable=SC2016 # The test must pass dollar expressions literally.
 args=('' 'space here' '$HOME' '${HOME}' '%n' '"quoted"' '\backslash' ';' $'line\nbreak')
+# Unsupported trailing-space directories must fail before publishing a unit.
+if "$binary" install "$bad" --exec "$program" --workdir "${work%/run}" --user "$run_user"; then
+  echo 'Accepted a working directory ending in a space' >&2; exit 1
+fi
+[[ ! -e /etc/systemd/system/$bad.service ]]
 "$binary" install "$name" --exec "$program" --workdir "$work" --user "$run_user" -- "${args[@]}"
 systemctl is-active --quiet "$name.service"
 systemctl is-enabled --quiet "$name.service"
