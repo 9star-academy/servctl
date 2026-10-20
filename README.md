@@ -1,10 +1,36 @@
-# servctl
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/logo-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/readme/logo-light.svg">
+  <img src="docs/assets/readme/logo-light.svg" alt="servctl" width="324" height="90">
+</picture>
+
+<p>一条命令，将已有程序注册为 systemd 服务</p>
+
+<p>
+  <img src="docs/assets/readme/go.svg" alt="Go 1.24+" width="90" height="28">
+  <img src="docs/assets/readme/linux.svg" alt="Linux" width="76" height="28">
+  <img src="docs/assets/readme/systemd.svg" alt="systemd" width="94" height="28">
+  <img src="docs/assets/readme/architectures.svg" alt="amd64 / arm64" width="142" height="28">
+</p>
+
+<p>
+  <a href="#一键安装">一键安装</a> ·
+  <a href="#部署应用服务">部署示例</a> ·
+  <a href="#日常管理">日常管理</a> ·
+  <a href="#开发和验证">开发验证</a>
+</p>
+
+<p>自动启动 · 开机自启 · 异常恢复 · journald 日志</p>
+
+</div>
+
+---
 
 一条命令，将已有可执行程序注册为 systemd 服务：创建 unit、启动、开机自启、异常退出自动重启。
 
 Go 编写，无第三方 Go 依赖，不运行额外守护进程。进程由 systemd 管理，日志由 journald 管理。
-
-> 首次发布说明：下面的在线安装命令需要先将代码推送到 GitHub，并发布包含二进制及校验文件的 Release。仅有仓库源码时，安装链接不能完成安装。发布步骤见本文末尾。
 
 ## 支持环境
 
@@ -14,6 +40,9 @@ Go 编写，无第三方 Go 依赖，不运行额外守护进程。进程由 sys
 - 程序应是对应服务器操作系统/CPU 的可执行文件，或带有效 shebang 的可执行脚本，并以前台方式运行。不直接运行 `.go` 源码。
 
 ## 一键安装
+
+> [!NOTE]
+> 首次发布说明：下面的在线安装命令需要先将代码推送到 GitHub，并发布包含二进制及校验文件的 Release。仅有仓库源码时，安装链接不能完成安装。发布步骤见本文末尾。
 
 首个正式 Release 发布后，在服务器执行：
 
@@ -42,7 +71,9 @@ servctl --help
 
 如果提示“仓库尚未发布正式 Release”（旧脚本提示“无法解析最新 Release”），请先检查 [Releases](https://github.com/9star-academy/servctl/releases)。源码已推送到 `main` 不代表二进制已发布；需要按本文末尾的发布步骤创建正式版本，并确认包含 `servctl_linux_amd64.tar.gz`、`servctl_linux_arm64.tar.gz` 和 `checksums.txt`。如果发布未完成，请检查 [Actions](https://github.com/9star-academy/servctl/actions) 的失败日志；修复后再发布。
 
-## 示例：ubuntu 用户部署应用服务
+## 部署应用服务
+
+以下以 `ubuntu` 用户运行 `myapp` 为例。
 
 假设你已上传 **Linux 可执行文件** 到 `/www/wwwroot/myapp/myapp`，配置文件位于该项目目录，程序配置为监听 8200：
 
@@ -92,15 +123,15 @@ sudo servctl install myapp \
 
 ## 日常管理
 
-```bash
-servctl status myapp
-sudo servctl logs myapp            # 最近 50 行
-sudo servctl logs myapp --follow   # 持续查看，Ctrl-C 退出
-sudo servctl restart myapp
-sudo servctl stop myapp
-sudo servctl start myapp
-sudo servctl uninstall myapp
-```
+| 操作 | 命令 |
+| --- | --- |
+| 查看状态 | `servctl status myapp` |
+| 查看最近 50 行日志 | `sudo servctl logs myapp` |
+| 持续查看日志，Ctrl-C 退出 | `sudo servctl logs myapp --follow` |
+| 重启服务 | `sudo servctl restart myapp` |
+| 停止服务 | `sudo servctl stop myapp` |
+| 启动服务 | `sudo servctl start myapp` |
+| 卸载服务 | `sudo servctl uninstall myapp` |
 
 - `stop` 只停止当前运行，保留开机自启；`start` 不修改自启设置。
 - `Restart=on-failure`：异常退出后等待 3 秒重试，60 秒内最多启动 5 次。正常退出、手动停止不会自动重启；触发限流后修复问题，再执行 `sudo systemctl reset-failed myapp` 和 `sudo servctl start myapp`。

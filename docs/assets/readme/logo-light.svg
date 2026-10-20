@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="360" height="100" viewBox="0 0 360 100" role="img" aria-labelledby="title">
+  <title id="title">servctl</title>
+  <defs>
+    <linearGradient id="terminal" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#0875e1"/>
+      <stop offset="1" stop-color="#06b6d4"/>
+    </linearGradient>
+  </defs>
+  <path d="M19 21 46 48 19 75 M59 75H83" fill="none" stroke="url(#terminal)" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="111" y="77" fill="#1f2328" font-family="Arial, Helvetica, sans-serif" font-size="76" font-weight="700" letter-spacing="-2">servctl</text>
+</svg>
