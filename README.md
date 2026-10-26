@@ -41,10 +41,7 @@ Go 编写，无第三方 Go 依赖，不运行额外守护进程。进程由 sys
 
 ## 一键安装
 
-> [!NOTE]
-> 首次发布说明：下面的在线安装命令需要先将代码推送到 GitHub，并发布包含二进制及校验文件的 Release。仅有仓库源码时，安装链接不能完成安装。发布步骤见本文末尾。
-
-首个正式 Release 发布后，在服务器执行：
+在 Linux 服务器执行，安装最新正式 Release：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/9star-academy/servctl/main/scripts/install.sh | sudo bash
@@ -57,7 +54,7 @@ curl -fsSL https://raw.githubusercontent.com/9star-academy/servctl/main/scripts/
 ```bash
 curl -fL https://raw.githubusercontent.com/9star-academy/servctl/main/scripts/install.sh -o /tmp/servctl-install.sh
 less /tmp/servctl-install.sh
-sudo bash /tmp/servctl-install.sh v0.1.0
+sudo bash /tmp/servctl-install.sh v0.1.1
 ```
 
 验证安装：
@@ -65,6 +62,7 @@ sudo bash /tmp/servctl-install.sh v0.1.0
 ```bash
 servctl --version
 servctl --help
+servctl list
 ```
 
 如需自定义工具安装目录，可用 `sudo env SERVCTL_INSTALL_DIR=/opt/bin bash /tmp/servctl-install.sh`；需要自行将该目录加入 PATH。再次运行安装脚本会更新 CLI，不重启或修改已经注册的业务服务。
@@ -204,8 +202,8 @@ GitHub CI 在 Ubuntu 24.04 运行上述实机检查。此脚本不重启主机�
 发布流程位于 `.github/workflows/release.yml`。在代码已审核、提交并推送且 CI 通过后，由维护者创建版本 tag：
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.1
+git push origin v0.1.1
 ```
 
 Release workflow 先执行测试及 systemd 冒烟检查，再构建并发布：
@@ -216,6 +214,8 @@ servctl_linux_arm64.tar.gz
 checksums.txt
 ```
 
-版本由 tag 注入 `servctl --version`。待 GitHub Release 成功且 `main` 分支包含安装脚本后，一键安装链接即可使用。Release 失败时先查看 Actions 日志，不要把本地构建通过视为已经发布。
+版本由 tag 注入 `servctl --version`。发布流程会将正式版本设为 latest，并在发布后使用真实下载的安装脚本和 Release 包验证全新安装、从 `v0.1.0` 更新、`list` 可用性，以及更新前后测试服务的配置和进程 PID 保持不变。检查使用临时安装目录和独立命名的测试服务，完成后清理。
+
+只有 Release 和发布后验证都通过，才算完成发布。失败时先查看 Actions 日志；Release 可能已经存在，需要同时确认资产和安装验证结果。
 
 ReedTang666 ♥️ you

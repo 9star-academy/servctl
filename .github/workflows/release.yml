@@ -48,4 +48,8 @@ jobs:
         run: |
           gh release create "$VERSION" \
             dist/servctl_linux_amd64.tar.gz dist/servctl_linux_arm64.tar.gz dist/checksums.txt \
-            --verify-tag --title "servctl $VERSION" --generate-notes
+            --verify-tag --latest --title "servctl $VERSION" --generate-notes
+      - name: Verify published installation and upgrade
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: sudo bash scripts/test-release.sh "$VERSION" v0.1.0
