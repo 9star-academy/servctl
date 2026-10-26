@@ -21,12 +21,14 @@ const help = `servctl — 一条命令注册 systemd 服务
   servctl install NAME --exec PATH --user USER [--workdir DIR] [-- ARG...]
   servctl start|stop|restart|status|uninstall NAME
   servctl logs NAME [--follow]
+  servctl list
   servctl --version
 
 示例:
   sudo servctl install myapp --exec /www/wwwroot/myapp/myapp --workdir /www/wwwroot/myapp --user ubuntu
   sudo servctl install myapp --exec ./myapp --user ubuntu -- --port 8200
   servctl status myapp
+  servctl list
   sudo servctl logs myapp --follow
 
 NAME 是服务名，不带 .service；--user 必填，必须是现有用户。
@@ -34,12 +36,14 @@ NAME 是服务名，不带 .service；--user 必填，必须是现有用户。
 install 自动启动并设置开机自启；同名服务拒绝覆盖。
 程序需可执行且以前台方式运行；不会编译源码或配置端口。
 卸载保留业务文件。仅管理 servctl 创建的服务。
+list 列出所有托管服务的运行状态和开机自启状态，包含已停止和失败的服务。
 写操作需要 sudo；日志权限不足时也请使用 sudo。
 `
 
 type Backend interface {
 	Install(context.Context, systemd.Config) error
 	Action(context.Context, string, string, bool) error
+	List(context.Context) error
 }
 
 type App struct {
@@ -93,7 +97,7 @@ func (a *App) run(ctx context.Context, args []string) error {
 	}
 	action := args[0]
 	switch action {
-	case "install", "start", "stop", "restart", "status", "logs", "uninstall":
+	case "install", "start", "stop", "restart", "status", "logs", "uninstall", "list":
 	default:
 		return fmt.Errorf("未知命令 %q，运行 servctl --help 查看用法", action)
 	}
@@ -101,19 +105,23 @@ func (a *App) run(ctx context.Context, args []string) error {
 		fmt.Fprint(a.Out, help)
 		return nil
 	}
-	if len(args) < 2 {
-		return fmt.Errorf("缺少服务名，运行 servctl --help 查看用法")
-	}
-	name := args[1]
-	if err := systemd.ValidateName(name); err != nil {
-		return err
+	name := ""
+	rest := args[1:]
+	if action != "list" {
+		if len(args) < 2 {
+			return fmt.Errorf("缺少服务名，运行 servctl --help 查看用法")
+		}
+		name = args[1]
+		if err := systemd.ValidateName(name); err != nil {
+			return err
+		}
+		rest = args[2:]
 	}
 	fs := flag.NewFlagSet(action, flag.ContinueOnError)
 	fs.SetOutput(a.Err)
 	fs.Usage = func() { fmt.Fprint(a.Out, help) }
 	c := systemd.Config{Name: name}
 	follow := false
-	rest := args[2:]
 	if action == "install" {
 		fs.StringVar(&c.Executable, "exec", "", "可执行文件路径（必填）")
 		fs.StringVar(&c.WorkDir, "workdir", a.Cwd, "工作目录")
@@ -132,6 +140,9 @@ func (a *App) run(ctx context.Context, args []string) error {
 		return err
 	}
 	if fs.NArg() != 0 {
+		if action == "list" {
+			return fmt.Errorf("list 不接受服务名或其他参数")
+		}
 		return fmt.Errorf("多余参数 %q；应用启动参数必须放在 -- 后", strings.Join(fs.Args(), " "))
 	}
 	if action == "install" {
@@ -151,7 +162,7 @@ func (a *App) run(ctx context.Context, args []string) error {
 	if a.GOOS != "linux" {
 		return fmt.Errorf("服务管理仅支持 Linux + systemd，当前系统为 %s", a.GOOS)
 	}
-	if action != "status" && action != "logs" && a.EUID != 0 {
+	if action != "status" && action != "logs" && action != "list" && a.EUID != 0 {
 		return fmt.Errorf("此操作需要 root 权限，请使用 sudo servctl %s ...", action)
 	}
 	if err := a.CheckSystem(); err != nil {
@@ -159,6 +170,9 @@ func (a *App) run(ctx context.Context, args []string) error {
 	}
 	if action == "install" {
 		return a.Backend.Install(ctx, c)
+	}
+	if action == "list" {
+		return a.Backend.List(ctx)
 	}
 	return a.Backend.Action(ctx, action, name, follow)
 }

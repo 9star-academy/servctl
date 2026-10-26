@@ -7,8 +7,9 @@ scratch=$(mktemp -d /tmp/servctl-smoke.XXXXXX)
 name="servctl-smoke-$$"
 bad="$name-bad"
 foreign="$name-foreign"
+failed="$name-failed"
 cleanup() {
-  for service in "$name" "$bad" "$foreign"; do
+  for service in "$name" "$bad" "$foreign" "$failed"; do
     systemctl disable --now "$service.service" >/dev/null 2>&1 || true
     rm -f "/etc/systemd/system/$service.service"
     systemctl reset-failed "$service.service" >/dev/null 2>&1 || true
@@ -17,6 +18,15 @@ cleanup() {
   rm -rf "$scratch"
 }
 trap cleanup EXIT
+assert_list_row() {
+  "$binary" list > "$scratch/list"
+  if ! awk -v name="$1" -v state="$2" -v autostart="$3" \
+    '$1 == name && $2 == state && $3 == autostart { found = 1 } END { exit !found }' "$scratch/list"; then
+    cat "$scratch/list" >&2
+    echo "Missing list row: $1 $2 $3" >&2
+    exit 1
+  fi
+}
 chmod 0755 "$scratch"
 run_user=$(id -un 65534)
 # Keep spaces (including a trailing space in an intermediate component), but
@@ -45,6 +55,7 @@ fi
 "$binary" install "$name" --exec "$program" --workdir "$work" --user "$run_user" -- "${args[@]}"
 systemctl is-active --quiet "$name.service"
 systemctl is-enabled --quiet "$name.service"
+assert_list_row "$name" active enabled
 [[ $(cat "$work/identity") == "$run_user" ]]
 [[ $(cat "$work/cwd") == "$work" ]]
 printf '%s\0' "${args[@]}" > "$scratch/expected"
@@ -69,6 +80,10 @@ done
 "$binary" restart "$name"
 "$binary" stop "$name"
 if systemctl is-active --quiet "$name.service"; then exit 1; fi
+assert_list_row "$name" inactive enabled
+systemctl disable "$name.service"
+assert_list_row "$name" inactive disabled
+systemctl enable "$name.service"
 "$binary" start "$name"
 "$binary" uninstall "$name"
 [[ ! -e /etc/systemd/system/$name.service && -f $program ]]
@@ -85,4 +100,23 @@ printf '[Service]\nExecStart=/bin/sleep 300\n' > "/etc/systemd/system/$foreign.s
 systemctl daemon-reload
 if "$binary" uninstall "$foreign"; then echo 'Removed unmanaged service' >&2; exit 1; fi
 [[ -f /etc/systemd/system/$foreign.service ]]
+
+# Keep a servctl-created unit in failed state to verify list does not hide it.
+"$binary" install "$failed" --exec /bin/sleep --workdir "$scratch" --user "$run_user" -- 300
+"$binary" stop "$failed"
+sed -i -e 's|^ExecStart=.*|ExecStart=:/bin/false|' -e 's/^Restart=on-failure$/Restart=no/' \
+  "/etc/systemd/system/$failed.service"
+systemctl daemon-reload
+systemctl start "$failed.service" || true # Failure is expected; assert its actual state below.
+for _ in {1..10}; do
+  if [[ $(systemctl show --property=ActiveState --value "$failed.service") == failed ]]; then break; fi
+  sleep 1
+done
+assert_list_row "$failed" failed enabled
+# The captured list must exclude the foreign service and the uninstalled one.
+if awk -v foreign="$foreign" -v removed="$name" \
+  '$1 == foreign || $1 == removed { found = 1 } END { exit !found }' "$scratch/list"; then
+  echo 'Listed an unmanaged or uninstalled service' >&2; exit 1
+fi
+"$binary" uninstall "$failed"
 echo 'Systemd smoke tests passed (reboot not tested).'

@@ -125,6 +125,7 @@ sudo servctl install myapp \
 
 | 操作 | 命令 |
 | --- | --- |
+| 列出所有托管服务 | `servctl list` |
 | 查看状态 | `servctl status myapp` |
 | 查看最近 50 行日志 | `sudo servctl logs myapp` |
 | 持续查看日志，Ctrl-C 退出 | `sudo servctl logs myapp --follow` |
@@ -141,6 +142,29 @@ sudo servctl install myapp \
 - `uninstall` 停止并禁用服务、移除 unit，**不会删除程序、配置、日志或数据库**。
 - 更新程序可先 `stop`，替换可执行文件后 `start`。第一版不提供零停机更新、自动构建、文件上传或应用版本回滚。更改安装参数需先卸载再重新注册，会有停机。
 - systemd 不继承你交互式终端的完整环境；第一版不提供环境变量配置参数，使用应用已有配置文件。
+
+### 列出托管服务
+
+服务较多时，运行以下命令查看清单，无需 `sudo`：
+
+```bash
+servctl list
+```
+
+示例输出（具体状态以当前系统为准）：
+
+```text
+NAME        STATE     AUTOSTART
+myapp       active    enabled
+myapp-test  failed    enabled
+worker      inactive  disabled
+```
+
+- 只列出 `/etc/systemd/system/` 中带 servctl 创建标记的普通 `.service` 文件，按服务名排序；跳过系统服务、其他工具创建的服务及符号链接。
+- 包含已停止、启动失败和未设置开机自启的托管服务，不按运行状态筛选。
+- `NAME` 为服务名，不带 `.service`；`STATE` 为运行状态，常见值为 `active`（运行）、`inactive`（停止）、`failed`（失败）。
+- `AUTOSTART` 为开机自启状态，常见值为 `enabled`（已启用）、`disabled`（未启用）；其他状态保留 [systemd 原始值](https://www.freedesktop.org/software/systemd/man/255/org.freedesktop.systemd1.html)。运行状态与开机自启状态分别展示。
+- 没有托管服务时显示“暂无 servctl 创建的服务。”；读取目录、文件或查询状态失败时返回非零退出码。此命令只查询，不启动、停止或修改服务。
 
 ## 开发和验证
 
@@ -171,7 +195,7 @@ go build -o /tmp/servctl ./cmd/servctl
 sudo bash scripts/test-systemd.sh /tmp/servctl
 ```
 
-检查内容包括运行用户、工作目录、特殊字符参数、active/enabled、重复安装拒绝、异常退出恢复、启停/重启、卸载保留业务文件、启动失败清理和非托管服务保护。
+检查内容包括运行用户、工作目录、特殊字符参数、active/enabled、重复安装拒绝、异常退出恢复、启停/重启、卸载保留业务文件、启动失败清理、非托管服务保护，以及 `list` 的运行/停止/失败状态、自启状态和非托管服务过滤。
 
 GitHub CI 在 Ubuntu 24.04 运行上述实机检查。此脚本不重启主机；开机恢复需在可重启测试机上额外验证：注册测试应用 → 重启 → 检查 `is-active` / `is-enabled` / 应用响应。不要用生产服务器执行重启验证。
 

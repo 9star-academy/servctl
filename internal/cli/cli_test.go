@@ -15,10 +15,12 @@ type fakeBackend struct {
 	config       systemd.Config
 	action, name string
 	follow       bool
+	listed       bool
 	err          error
 }
 
 func (b *fakeBackend) Install(_ context.Context, c systemd.Config) error { b.config = c; return b.err }
+func (b *fakeBackend) List(context.Context) error                        { b.listed = true; return b.err }
 func (b *fakeBackend) Action(_ context.Context, a, n string, f bool) error {
 	b.action = a
 	b.name = n
@@ -145,5 +147,73 @@ func TestInstallWorkdirAndBackendFailure(t *testing.T) {
 	}
 	if a.Run(context.Background(), []string{"install", "admin", "--exec", "./app", "--user", "ubuntu", "--workdir", ""}) == 0 {
 		t.Fatal("empty workdir")
+	}
+}
+
+func TestListIsReadOnlyAndNeedsNoName(t *testing.T) {
+	a, b, out := testApp(t)
+	a.EUID = 1000
+	if code := a.Run(context.Background(), []string{"list"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, out.String())
+	}
+	if !b.listed || b.action != "" || b.config.Name != "" {
+		t.Fatalf("unexpected backend call: %+v", b)
+	}
+}
+
+func TestListRejectsArguments(t *testing.T) {
+	for _, args := range [][]string{{"list", "admin"}, {"list", "--follow"}, {"list", "--all"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			a, b, _ := testApp(t)
+			if a.Run(context.Background(), args) == 0 {
+				t.Fatal("accepted list arguments")
+			}
+			if b.listed || b.action != "" || b.config.Name != "" {
+				t.Fatal("called backend for invalid arguments")
+			}
+		})
+	}
+}
+
+func TestListRuntimeGuardsAndErrors(t *testing.T) {
+	for _, kind := range []string{"platform", "system", "backend", "cancelled"} {
+		t.Run(kind, func(t *testing.T) {
+			a, b, out := testApp(t)
+			ctx := context.Background()
+			wantCode := 1
+			switch kind {
+			case "platform":
+				a.GOOS = "darwin"
+			case "system":
+				a.CheckSystem = func() error { return errors.New("not booted") }
+			case "backend":
+				b.err = errors.New("list failed")
+			case "cancelled":
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+				b.err = context.Canceled
+				wantCode = 130
+			}
+			if code := a.Run(ctx, []string{"list"}); code != wantCode {
+				t.Fatalf("exit %d, want %d: %s", code, wantCode, out.String())
+			}
+			if b.listed != (kind == "backend" || kind == "cancelled") {
+				t.Fatalf("unexpected list dispatch: %+v", b)
+			}
+		})
+	}
+}
+
+func TestListHelpOutsideLinux(t *testing.T) {
+	for _, args := range [][]string{{"--help"}, {"list", "--help"}, {"list", "-h"}} {
+		a, b, out := testApp(t)
+		a.GOOS = "darwin"
+		if a.Run(context.Background(), args) != 0 || !strings.Contains(out.String(), "servctl list") {
+			t.Fatal(out.String())
+		}
+		if b.listed {
+			t.Fatal("help called backend")
+		}
 	}
 }

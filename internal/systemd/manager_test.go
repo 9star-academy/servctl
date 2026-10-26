@@ -17,6 +17,7 @@ type fakeRunner struct {
 	existing         bool
 	inactive         bool
 	previousRestarts bool
+	states           map[string]string
 }
 
 func (r *fakeRunner) Output(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -24,6 +25,9 @@ func (r *fakeRunner) Output(_ context.Context, name string, args ...string) ([]b
 	r.calls = append(r.calls, s)
 	if r.fail != "" && strings.Contains(s, r.fail) {
 		return []byte("simulated failure"), errors.New("exit 1")
+	}
+	if strings.Contains(s, "--property=UnitFileState") {
+		return []byte(r.states[args[len(args)-1]]), nil
 	}
 	if strings.Contains(s, "--property=LoadState") {
 		if r.existing {
