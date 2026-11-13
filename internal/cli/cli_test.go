@@ -114,6 +114,30 @@ func TestActionsAndBackendErrors(t *testing.T) {
 	}
 }
 
+func TestSystemServiceNames(t *testing.T) {
+	for _, name := range []string{"nginx.service", "getty@tty1", "getty@tty1.service", "worker@a\\x2db.service"} {
+		a, b, out := testApp(t)
+		a.EUID = 1000
+		if code := a.Run(context.Background(), []string{"status", name}); code != 0 || b.name != name {
+			t.Fatalf("status %s: exit %d, backend = %+v, output = %s", name, code, b, out)
+		}
+	}
+	for _, args := range [][]string{
+		{"restart", "worker*.service"},
+		{"start", "/usr/lib/systemd/system/worker.service"},
+		{"logs", "worker@.service"},
+		{"stop", "worker\nother"},
+		{"install", "worker.service", "--exec", "./app", "--user", "ubuntu"},
+		{"uninstall", "worker.service"},
+		{"uninstall", "worker@backup"},
+	} {
+		a, b, _ := testApp(t)
+		if a.Run(context.Background(), args) == 0 || b.action != "" || b.config.Name != "" {
+			t.Fatalf("accepted invalid arguments %q", args)
+		}
+	}
+}
+
 func TestNewAndCancellation(t *testing.T) {
 	var out bytes.Buffer
 	a, err := New("test", &out, &out)

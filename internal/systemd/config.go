@@ -24,6 +24,7 @@ type Config struct {
 }
 
 var serviceName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,199}$`)
+var unitName = regexp.MustCompile(`^[A-Za-z0-9:_.\\-]+(@[A-Za-z0-9:_.@\\-]+)?$`)
 var userName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]*\$?$`)
 
 func ValidateName(name string) error {
@@ -31,6 +32,16 @@ func ValidateName(name string) error {
 		return fmt.Errorf("无效服务名 %q：使用字母、数字、点、下划线或横线，以字母或数字开头，最多 200 字符，不带 .service", name)
 	}
 	return nil
+}
+
+// ServiceUnitName accepts a literal system service name, with or without its suffix.
+func ServiceUnitName(name string) (string, error) {
+	const suffix = ".service"
+	base := strings.TrimSuffix(name, suffix)
+	if len(base)+len(suffix) > 255 || !unitName.MatchString(base) {
+		return "", fmt.Errorf("无效 systemd 服务名 %q：请指定一个服务名，模板服务需指定实例", name)
+	}
+	return base + suffix, nil
 }
 
 func (c Config) Validate() error {

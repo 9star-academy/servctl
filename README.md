@@ -133,13 +133,26 @@ sudo servctl install myapp \
 | 卸载服务 | `sudo servctl uninstall myapp` |
 
 - `stop` 只停止当前运行，保留开机自启；`start` 不修改自启设置。
-- `Restart=on-failure`：异常退出后等待 3 秒重试，60 秒内最多启动 5 次。正常退出、手动停止不会自动重启；触发限流后修复问题，再执行 `sudo systemctl reset-failed myapp` 和 `sudo servctl start myapp`。
+- servctl 创建的服务使用 `Restart=on-failure`，异常退出后等待 3 秒重试，60 秒内最多启动 5 次。正常退出、手动停止不会自动重启；触发限流后修复问题，再执行 `sudo systemctl reset-failed myapp` 和 `sudo servctl start myapp`。
 - `status` 对停止/失败的服务保留非零退出码；查看日志的权限由系统控制，权限不足请加 `sudo`。
 - 同名服务一律拒绝覆盖，包括系统已有服务、其他工具创建的服务和被 mask 的服务。
-- 管理命令只接受 `/etc/systemd/system/` 中带 servctl 标记的普通 unit 文件，拒绝符号链接和非托管服务。
-- `uninstall` 停止并禁用服务、移除 unit，**不会删除程序、配置、日志或数据库**。
+- `uninstall` 只接受 `/etc/systemd/system/` 中带 servctl 标记的普通服务文件。它会停止并禁用服务、移除 unit，**不会删除程序、配置、日志或数据库**。
 - 更新程序可先 `stop`，替换可执行文件后 `start`。第一版不提供零停机更新、自动构建、文件上传或应用版本回滚。更改安装参数需先卸载再重新注册，会有停机。
 - systemd 不继承你交互式终端的完整环境；第一版不提供环境变量配置参数，使用应用已有配置文件。
+
+### 操作已有的系统服务
+
+`status`、`logs`、`start`、`stop` 和 `restart` 可用于系统包安装或手工创建的 systemd 服务。支持简写、完整的 `.service` 名称以及 `getty@tty1.service` 这样的实例名。
+
+```bash
+servctl status nginx.service
+sudo servctl logs nginx --follow
+sudo servctl start nginx
+sudo servctl stop nginx
+sudo servctl restart nginx
+```
+
+`logs` 读取 systemd journal。服务自己写入的日志文件需按该服务的配置查看。
 
 ### 列出托管服务
 
@@ -193,7 +206,7 @@ go build -o /tmp/servctl ./cmd/servctl
 sudo bash scripts/test-systemd.sh /tmp/servctl
 ```
 
-检查内容包括运行用户、工作目录、特殊字符参数、active/enabled、重复安装拒绝、异常退出恢复、启停/重启、卸载保留业务文件、启动失败清理、非托管服务保护，以及 `list` 的运行/停止/失败状态、自启状态和非托管服务过滤。
+检查内容包括运行用户、工作目录、特殊字符参数、active/enabled、重复安装拒绝、异常退出恢复、启停/重启、卸载保留业务文件、启动失败清理、已有服务的运行操作和覆盖/卸载保护，以及 `list` 的运行/停止/失败状态、自启状态和非托管服务过滤。
 
 GitHub CI 在 Ubuntu 24.04 运行上述实机检查。此脚本不重启主机；开机恢复需在可重启测试机上额外验证：注册测试应用 → 重启 → 检查 `is-active` / `is-enabled` / 应用响应。不要用生产服务器执行重启验证。
 

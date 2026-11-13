@@ -143,46 +143,72 @@ func (m *Manager) managedPath(name string) (string, error) {
 }
 
 func (m *Manager) Action(ctx context.Context, action, name string, follow bool) error {
-	path, err := m.managedPath(name)
+	if action == "uninstall" {
+		return m.uninstall(ctx, name)
+	}
+	unit, err := ServiceUnitName(name)
 	if err != nil {
 		return err
 	}
-	unit := name + ".service"
 	switch action {
 	case "logs":
-		args := []string{"--unit", unit, "--lines", "50", "--no-pager"}
+		// Journald records the primary unit name, even when started through an alias.
+		// The requested name can still find historical logs for a removed unit.
+		if out, err := m.Runner.Output(ctx, "systemctl", "show", "--property=Id", "--", unit); err == nil {
+			for _, line := range strings.Split(string(out), "\n") {
+				if id, ok := strings.CutPrefix(line, "Id="); ok {
+					if canonical, err := ServiceUnitName(id); err == nil && canonical == id {
+						unit = canonical
+					}
+					break
+				}
+			}
+		}
+		args := []string{"--unit=" + unit, "--lines", "50", "--no-pager"}
 		if follow {
 			args = append(args, "--follow")
 		}
 		return m.Runner.Stream(ctx, m.Out, "journalctl", args...)
 	case "status":
-		return m.Runner.Stream(ctx, m.Out, "systemctl", "status", "--no-pager", "--full", unit)
+		return m.Runner.Stream(ctx, m.Out, "systemctl", "status", "--no-pager", "--full", "--", unit)
 	case "start", "restart", "stop":
-		if _, err = m.Runner.Output(ctx, "systemctl", action, unit); err != nil {
+		if _, err := m.Runner.Output(ctx, "systemctl", action, "--", unit); err != nil {
 			m.diagnostics(unit)
 			return err
 		}
-		if action != "stop" {
-			if err = m.checkRunning(ctx, unit, false); err != nil {
-				m.diagnostics(unit)
-				return err
+		base := strings.TrimSuffix(unit, ".service")
+		if action == "start" || action == "restart" {
+			// The active-state check applies to the long-running units servctl creates.
+			// Other units can finish successfully without staying active (e.g. oneshot).
+			if _, err := m.managedPath(base); err == nil {
+				if err := m.checkRunning(ctx, unit, false); err != nil {
+					m.diagnostics(unit)
+					return err
+				}
 			}
 		}
-		fmt.Fprintf(m.Out, "%s: %s 完成\n", name, action)
-		return nil
-	case "uninstall":
-		if _, err = m.Runner.Output(ctx, "systemctl", "disable", "--now", unit); err != nil {
-			return err
-		}
-		if err = os.Remove(path); err != nil {
-			return err
-		}
-		if _, err = m.Runner.Output(ctx, "systemctl", "daemon-reload"); err != nil {
-			return err
-		}
-		fmt.Fprintf(m.Out, "已卸载服务 %s，业务文件已保留。\n", name)
+		fmt.Fprintf(m.Out, "%s: %s 完成\n", base, action)
 		return nil
 	default:
 		return fmt.Errorf("未知操作: %s", action)
 	}
+}
+
+func (m *Manager) uninstall(ctx context.Context, name string) error {
+	path, err := m.managedPath(name)
+	if err != nil {
+		return err
+	}
+	unit := name + ".service"
+	if _, err := m.Runner.Output(ctx, "systemctl", "disable", "--now", unit); err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil {
+		return err
+	}
+	if _, err := m.Runner.Output(ctx, "systemctl", "daemon-reload"); err != nil {
+		return err
+	}
+	fmt.Fprintf(m.Out, "已卸载服务 %s，业务文件已保留。\n", name)
+	return nil
 }

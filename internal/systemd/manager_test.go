@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,7 @@ type fakeRunner struct {
 	existing         bool
 	inactive         bool
 	previousRestarts bool
+	unitID           string
 	states           map[string]string
 }
 
@@ -34,6 +36,9 @@ func (r *fakeRunner) Output(_ context.Context, name string, args ...string) ([]b
 			return []byte("loaded\n"), nil
 		}
 		return []byte("not-found\n"), nil
+	}
+	if strings.Contains(s, "--property=Id") && r.unitID != "" {
+		return []byte("Id=" + r.unitID + "\n"), nil
 	}
 	if strings.Contains(s, "--property=ActiveState") {
 		if r.inactive {
@@ -136,26 +141,88 @@ func TestFailedProcessRollsBack(t *testing.T) {
 	}
 }
 
-func TestManagementProtectsUnmanagedFiles(t *testing.T) {
+func TestUninstallProtectsUnmanagedFiles(t *testing.T) {
 	for _, kind := range []string{"unmarked", "symlink", "missing"} {
 		t.Run(kind, func(t *testing.T) {
 			m, r := testManager(t)
 			path := filepath.Join(m.UnitDir, "admin.service")
 			if kind == "unmarked" {
-				os.WriteFile(path, []byte("[Service]\n"), 0644)
+				if err := os.WriteFile(path, []byte("[Service]\n"), 0644); err != nil {
+					t.Fatal(err)
+				}
 			}
 			if kind == "symlink" {
-				os.Symlink("/dev/null", path)
-			}
-			for _, action := range []string{"start", "stop", "restart", "status", "uninstall", "logs"} {
-				if m.Action(context.Background(), action, "admin", false) == nil {
-					t.Errorf("accepted %s", action)
+				if err := os.Symlink("/dev/null", path); err != nil {
+					t.Fatal(err)
 				}
+			}
+			if m.Action(context.Background(), "uninstall", "admin", false) == nil {
+				t.Fatal("uninstalled unmanaged service")
 			}
 			if len(r.calls) > 0 {
 				t.Fatal(r.calls)
 			}
 		})
+	}
+}
+
+func TestActionsForExistingSystemServices(t *testing.T) {
+	m, r := testManager(t)
+	// Only the alias is local. Systemd can resolve the actual unit elsewhere.
+	if err := os.Symlink("/usr/lib/systemd/system/worker.service", filepath.Join(m.UnitDir, "worker-alias.service")); err != nil {
+		t.Fatal(err)
+	}
+	r.unitID = "worker.service"
+	m.Observe = func(context.Context, time.Duration) error {
+		return errors.New("unexpected active-state check for external unit")
+	}
+	for _, tt := range []struct {
+		action string
+		name   string
+		follow bool
+		want   []string
+	}{
+		{"status", "worker-alias.service", false, []string{"systemctl status --no-pager --full -- worker-alias.service"}},
+		{"logs", "worker-alias", true, []string{
+			"systemctl show --property=Id -- worker-alias.service",
+			"journalctl --unit=worker.service --lines 50 --no-pager --follow",
+		}},
+		{"start", "worker@backup.service", false, []string{"systemctl start -- worker@backup.service"}},
+		{"restart", "worker@backup", false, []string{"systemctl restart -- worker@backup.service"}},
+		{"stop", "-worker", false, []string{"systemctl stop -- -worker.service"}},
+	} {
+		t.Run(tt.action, func(t *testing.T) {
+			r.calls = nil
+			if err := m.Action(context.Background(), tt.action, tt.name, tt.follow); err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(r.calls, tt.want) {
+				t.Fatalf("calls = %q, want %q", r.calls, tt.want)
+			}
+		})
+	}
+}
+
+func TestLogsUseRequestedUnitWhenIDLookupFails(t *testing.T) {
+	m, r := testManager(t)
+	r.fail = "--property=Id"
+	if err := m.Action(context.Background(), "logs", "worker.service", false); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"systemctl show --property=Id -- worker.service", "journalctl --unit=worker.service --lines 50 --no-pager"}
+	if !slices.Equal(r.calls, want) {
+		t.Fatalf("calls = %q, want %q", r.calls, want)
+	}
+}
+
+func TestStartStillChecksManagedServiceState(t *testing.T) {
+	m, r := testManager(t)
+	if err := os.WriteFile(filepath.Join(m.UnitDir, "admin.service"), []byte(Marker), 0644); err != nil {
+		t.Fatal(err)
+	}
+	r.inactive = true
+	if err := m.Action(context.Background(), "start", "admin.service", false); err == nil {
+		t.Fatal("reported failed managed service as started")
 	}
 }
 

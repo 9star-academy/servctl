@@ -7,6 +7,10 @@ scratch=$(mktemp -d /tmp/servctl-smoke.XXXXXX)
 name="servctl-smoke-$$"
 bad="$name-bad"
 foreign="$name-foreign"
+foreign_alias="$foreign-alias"
+foreign_unit="/etc/systemd/system/$foreign.service"
+oneshot_template="$foreign-oneshot"
+oneshot="$oneshot_template@fixture"
 failed="$name-failed"
 cleanup() {
   for service in "$name" "$bad" "$foreign" "$failed"; do
@@ -14,6 +18,9 @@ cleanup() {
     rm -f "/etc/systemd/system/$service.service"
     systemctl reset-failed "$service.service" >/dev/null 2>&1 || true
   done
+  systemctl stop "$oneshot.service" >/dev/null 2>&1 || true
+  systemctl reset-failed "$oneshot.service" >/dev/null 2>&1 || true
+  rm -f "/etc/systemd/system/$foreign_alias.service" "/etc/systemd/system/$oneshot_template@.service"
   systemctl daemon-reload
   rm -rf "$scratch"
 }
@@ -96,10 +103,51 @@ fi
 [[ ! -e /etc/systemd/system/$bad.service ]]
 if systemctl is-enabled --quiet "$bad.service"; then exit 1; fi
 
-printf '[Service]\nExecStart=/bin/sleep 300\n' > "/etc/systemd/system/$foreign.service"
-systemctl daemon-reload
+# Operate an external service by name and read its journal through a systemd alias.
+foreign_log="${scratch##*/} external service started"
+cat > "$scratch/foreign.service" <<EOF
+[Service]
+ExecStart=/bin/sh -c 'echo $foreign_log; exec /bin/sleep 300'
+
+[Install]
+WantedBy=multi-user.target
+Alias=$foreign_alias.service
+EOF
+cp "$scratch/foreign.service" "$foreign_unit"
+cat > "/etc/systemd/system/$oneshot_template@.service" <<'EOF'
+[Service]
+Type=oneshot
+ExecStart=/bin/true
+EOF
+systemctl enable "$foreign.service"
+"$binary" start "$foreign"
+systemctl is-active --quiet "$foreign.service"
+"$binary" status "$foreign.service"
+for _ in {1..20}; do
+  "$binary" logs "$foreign_alias.service" > "$scratch/foreign.log"
+  if grep -Fq "$foreign_log" "$scratch/foreign.log"; then break; fi
+  sleep 0.25
+done
+grep -F "$foreign_log" "$scratch/foreign.log"
+old_pid=$(systemctl show --property=MainPID --value "$foreign.service")
+"$binary" restart "$foreign.service"
+new_pid=$(systemctl show --property=MainPID --value "$foreign.service")
+[[ $new_pid != 0 && $new_pid != "$old_pid" ]]
+if "$binary" install "$foreign" --exec "$program" --workdir "$work" --user "$run_user"; then
+  echo 'Overwrote an unmanaged service' >&2; exit 1
+fi
 if "$binary" uninstall "$foreign"; then echo 'Removed unmanaged service' >&2; exit 1; fi
-[[ -f /etc/systemd/system/$foreign.service ]]
+cmp "$scratch/foreign.service" "$foreign_unit"
+systemctl is-enabled --quiet "$foreign.service"
+[[ $(systemctl show --property=MainPID --value "$foreign.service") == "$new_pid" ]]
+"$binary" stop "$foreign_alias"
+[[ $(systemctl show --property=ActiveState --value "$foreign.service") == inactive ]]
+systemctl is-enabled --quiet "$foreign.service"
+
+# A successful oneshot can be inactive immediately after either operation.
+"$binary" start "$oneshot.service"
+"$binary" restart "$oneshot"
+[[ $(systemctl show --property=ActiveState --value "$oneshot.service") == inactive ]]
 
 # Keep a servctl-created unit in failed state to verify list does not hide it.
 "$binary" install "$failed" --exec /bin/sleep --workdir "$scratch" --user "$run_user" -- 300

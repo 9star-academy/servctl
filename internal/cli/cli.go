@@ -19,8 +19,9 @@ const help = `servctl — 一条命令注册 systemd 服务
 
 用法:
   servctl install NAME --exec PATH --user USER [--workdir DIR] [-- ARG...]
-  servctl start|stop|restart|status|uninstall NAME
-  servctl logs NAME [--follow]
+  servctl start|stop|restart|status UNIT
+  servctl logs UNIT [--follow]
+  servctl uninstall NAME
   servctl list
   servctl --version
 
@@ -31,12 +32,13 @@ const help = `servctl — 一条命令注册 systemd 服务
   servctl list
   sudo servctl logs myapp --follow
 
-NAME 是服务名，不带 .service；--user 必填，必须是现有用户。
+NAME 不带 .service；install 的 --user 必填，必须是现有用户。
+UNIT 可以是已有的系统服务名，可带 .service 或实例名（如 getty@tty1.service）。
 --exec 相对路径和默认工作目录均以执行命令时的目录为准。
 install 自动启动并设置开机自启；同名服务拒绝覆盖。
 程序需可执行且以前台方式运行；不会编译源码或配置端口。
-卸载保留业务文件。仅管理 servctl 创建的服务。
-list 列出所有托管服务的运行状态和开机自启状态，包含已停止和失败的服务。
+uninstall 仅卸载 servctl 创建的服务，保留业务文件。
+list 列出 servctl 创建的服务的运行状态和开机自启状态，包含已停止和失败的服务。
 写操作需要 sudo；日志权限不足时也请使用 sudo。
 `
 
@@ -112,7 +114,11 @@ func (a *App) run(ctx context.Context, args []string) error {
 			return fmt.Errorf("缺少服务名，运行 servctl --help 查看用法")
 		}
 		name = args[1]
-		if err := systemd.ValidateName(name); err != nil {
+		if action == "install" || action == "uninstall" {
+			if err := systemd.ValidateName(name); err != nil {
+				return err
+			}
+		} else if _, err := systemd.ServiceUnitName(name); err != nil {
 			return err
 		}
 		rest = args[2:]
