@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/9star-academy/servctl/internal/selfupdate"
 	"github.com/9star-academy/servctl/internal/systemd"
 )
 
@@ -23,6 +24,7 @@ const help = `servctl — 一条命令注册 systemd 服务
   servctl logs UNIT [--follow]
   servctl uninstall NAME
   servctl list
+  servctl update
   servctl --version
 
 示例:
@@ -30,6 +32,7 @@ const help = `servctl — 一条命令注册 systemd 服务
   sudo servctl install myapp --exec ./myapp --user ubuntu -- --port 8200
   servctl status myapp
   servctl list
+  sudo servctl update
   sudo servctl logs myapp --follow
 
 NAME 不带 .service；install 的 --user 必填，必须是现有用户。
@@ -39,7 +42,9 @@ install 自动启动并设置开机自启；同名服务拒绝覆盖。
 程序需可执行且以前台方式运行；不会编译源码或配置端口。
 uninstall 仅卸载 servctl 创建的服务，保留业务文件。
 list 列出 servctl 创建的服务的运行状态和开机自启状态，包含已停止和失败的服务。
-写操作需要 sudo；日志权限不足时也请使用 sudo。
+update 检查最新正式版，发现新版本时校验并更新当前 servctl 程序。
+修改系统服务需要 sudo；update 需要写入程序所在目录的权限。
+日志权限不足时请使用 sudo。
 `
 
 type Backend interface {
@@ -54,6 +59,7 @@ type App struct {
 	Version, GOOS, Cwd string
 	EUID               int
 	CheckSystem        func() error
+	update             func(context.Context, string, io.Writer) error
 }
 
 func New(version string, out, errOut io.Writer) (*App, error) {
@@ -61,7 +67,11 @@ func New(version string, out, errOut io.Writer) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &App{Backend: systemd.NewManager(out), Out: out, Err: errOut, Version: version, GOOS: runtime.GOOS, EUID: os.Geteuid(), Cwd: cwd, CheckSystem: checkSystem}, nil
+	return &App{
+		Backend: systemd.NewManager(out), Out: out, Err: errOut,
+		Version: version, GOOS: runtime.GOOS, EUID: os.Geteuid(), Cwd: cwd,
+		CheckSystem: checkSystem, update: selfupdate.Run,
+	}, nil
 }
 
 func checkSystem() error {
@@ -99,13 +109,26 @@ func (a *App) run(ctx context.Context, args []string) error {
 	}
 	action := args[0]
 	switch action {
-	case "install", "start", "stop", "restart", "status", "logs", "uninstall", "list":
+	case "install", "start", "stop", "restart", "status", "logs", "uninstall", "list", "update":
 	default:
 		return fmt.Errorf("未知命令 %q，运行 servctl --help 查看用法", action)
 	}
 	if len(args) == 2 && (args[1] == "--help" || args[1] == "-h") {
 		fmt.Fprint(a.Out, help)
 		return nil
+	}
+	if action == "update" {
+		if len(args) != 1 {
+			return fmt.Errorf("update 不接受服务名或其他参数")
+		}
+		if a.GOOS != "linux" {
+			return fmt.Errorf("自更新仅支持 Linux，当前系统为 %s", a.GOOS)
+		}
+		err := a.update(ctx, a.Version, a.Out)
+		if a.EUID != 0 && errors.Is(err, os.ErrPermission) {
+			return fmt.Errorf("更新需要写入安装目录的权限，请使用 sudo servctl update: %w", err)
+		}
+		return err
 	}
 	name := ""
 	rest := args[1:]

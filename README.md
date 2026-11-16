@@ -69,6 +69,20 @@ servctl list
 
 如果提示“仓库尚未发布正式 Release”（旧脚本提示“无法解析最新 Release”），请先检查 [Releases](https://github.com/9star-academy/servctl/releases)。源码已推送到 `main` 不代表二进制已发布；需要按本文末尾的发布步骤创建正式版本，并确认包含 `servctl_linux_amd64.tar.gz`、`servctl_linux_arm64.tar.gz` 和 `checksums.txt`。如果发布未完成，请检查 [Actions](https://github.com/9star-academy/servctl/actions) 的失败日志；修复后再发布。
 
+### 更新 servctl
+
+默认安装到 `/usr/local/bin` 时，执行以下命令检查并更新 servctl 本身。
+
+```bash
+sudo servctl update
+servctl --version
+```
+
+- 每次执行 `update` 都会检查 GitHub 上的最新正式版。发现更高版本时，自动下载当前 CPU 架构的发布包，通过 SHA-256 校验后替换正在使用的 `servctl` 文件。当前版本已是最新时直接退出。
+- 更新期间已托管的业务进程可以继续运行。下载或校验失败时，原有程序仍可使用。
+- 自定义安装目录可以直接运行对应路径下的 `servctl update`。需要写入该目录的权限，必要时通过 `sudo` 执行该完整路径。
+- 如果当前版本提示 `update` 是未知命令，先按上面的安装命令升级到带 `update` 的正式版。源码构建的 `dev` 版本可通过重新构建或运行安装脚本升级。
+
 ## 部署应用服务
 
 以下以 `ubuntu` 用户运行 `myapp` 为例。
@@ -165,16 +179,21 @@ servctl list
 示例输出（具体状态以当前系统为准）：
 
 ```text
-NAME        STATE     AUTOSTART
-myapp       active    enabled
-myapp-test  failed    enabled
-worker      inactive  disabled
+NAME        STATE     AUTOSTART  PID    UPTIME  RESTARTS  USER    MEM
+myapp       active    enabled    24817  3d4h    0         ubuntu  84.0MiB
+myapp-test  failed    enabled    -      -       5         deploy  -
+worker      inactive  disabled   -      -       0         ubuntu  -
 ```
 
 - 只列出 `/etc/systemd/system/` 中带 servctl 创建标记的普通 `.service` 文件，按服务名排序；跳过系统服务、其他工具创建的服务及符号链接。
 - 包含已停止、启动失败和未设置开机自启的托管服务，不按运行状态筛选。
 - `NAME` 为服务名，不带 `.service`；`STATE` 为运行状态，常见值为 `active`（运行）、`inactive`（停止）、`failed`（失败）。
 - `AUTOSTART` 为开机自启状态，常见值为 `enabled`（已启用）、`disabled`（未启用）；其他状态保留 [systemd 原始值](https://www.freedesktop.org/software/systemd/man/255/org.freedesktop.systemd1.html)。运行状态与开机自启状态分别展示。
+- `PID` 为主进程 ID。没有主进程时显示 `-`。
+- `UPTIME` 为本次进入 `active` 后的时长，例如 `42s` 或 `3d4h`。停止或失败时显示 `-`。
+- `RESTARTS` 为 systemd 当前记录的自动重启次数。计数可能重置，无值时显示 `-`。
+- `USER` 为服务配置的运行账号。无值时显示 `-`。
+- `MEM` 为整个服务（含子进程）当前占用的内存。没有可用统计时显示 `-`。
 - 没有托管服务时显示“暂无 servctl 创建的服务。”；读取目录、文件或查询状态失败时返回非零退出码。此命令只查询，不启动、停止或修改服务。
 
 ## 开发和验证
@@ -206,7 +225,7 @@ go build -o /tmp/servctl ./cmd/servctl
 sudo bash scripts/test-systemd.sh /tmp/servctl
 ```
 
-检查内容包括运行用户、工作目录、特殊字符参数、active/enabled、重复安装拒绝、异常退出恢复、启停/重启、卸载保留业务文件、启动失败清理、已有服务的运行操作和覆盖/卸载保护，以及 `list` 的运行/停止/失败状态、自启状态和非托管服务过滤。
+检查内容包括运行用户、工作目录、特殊字符参数、active/enabled、重复安装拒绝、异常退出恢复、启停/重启、卸载保留业务文件、启动失败清理、已有服务的运行操作和覆盖/卸载保护，以及 `list` 在运行、停止和失败状态下的列输出及非托管服务过滤。
 
 GitHub CI 在 Ubuntu 24.04 运行上述实机检查。此脚本不重启主机；开机恢复需在可重启测试机上额外验证：注册测试应用 → 重启 → 检查 `is-active` / `is-enabled` / 应用响应。不要用生产服务器执行重启验证。
 

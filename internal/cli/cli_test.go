@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -239,5 +241,50 @@ func TestListHelpOutsideLinux(t *testing.T) {
 		if b.listed {
 			t.Fatal("help called backend")
 		}
+	}
+}
+
+func TestUpdateCommand(t *testing.T) {
+	for _, tt := range []struct {
+		name, platform string
+		args           []string
+		updateErr      error
+		wantCode       int
+		wantCalled     bool
+		wantOutput     string
+	}{
+		{"linux without systemd or root", "linux", []string{"update"}, nil, 0, true, "v0.1.0"},
+		{"help on macOS", "darwin", []string{"update", "--help"}, nil, 0, false, "servctl update"},
+		{"macOS", "darwin", []string{"update"}, nil, 1, false, "仅支持 Linux"},
+		{"extra argument", "linux", []string{"update", "myservice"}, nil, 1, false, "update 不接受"},
+		{"permission denied", "linux", []string{"update"}, os.ErrPermission, 1, true, "sudo servctl update"},
+		{"network error", "linux", []string{"update"}, errors.New("download failed"), 1, true, "download failed"},
+		{"cancelled", "linux", []string{"update"}, context.Canceled, 130, true, "context canceled"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			a, b, out := testApp(t)
+			a.GOOS, a.EUID = tt.platform, 1000
+			a.CheckSystem = func() error {
+				t.Fatal("update queried systemd")
+				return nil
+			}
+			called := false
+			a.update = func(_ context.Context, current string, w io.Writer) error {
+				called = true
+				_, _ = io.WriteString(w, current+"\n")
+				return tt.updateErr
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if errors.Is(tt.updateErr, context.Canceled) {
+				cancel()
+			}
+			if code := a.Run(ctx, tt.args); code != tt.wantCode || called != tt.wantCalled || !strings.Contains(out.String(), tt.wantOutput) {
+				t.Fatalf("exit = %d, update called = %t, output = %q", code, called, out.String())
+			}
+			if b.listed || b.action != "" || b.config.Name != "" {
+				t.Fatalf("update called service backend: %+v", b)
+			}
+		})
 	}
 }

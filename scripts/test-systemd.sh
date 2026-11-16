@@ -26,11 +26,36 @@ cleanup() {
 }
 trap cleanup EXIT
 assert_list_row() {
+  local unit="$1.service" current_memory pid=- memory_available=0
   "$binary" list > "$scratch/list"
-  if ! awk -v name="$1" -v state="$2" -v autostart="$3" \
-    '$1 == name && $2 == state && $3 == autostart { found = 1 } END { exit !found }' "$scratch/list"; then
+  if [[ $2 == active ]]; then
+    pid=$(systemctl show --property=MainPID --value "$unit")
+    current_memory=$(systemctl show --property=MemoryCurrent --value "$unit")
+    if [[ $current_memory =~ ^[0-9]+$ && $current_memory != 18446744073709551615 ]]; then
+      memory_available=1
+    fi
+  fi
+  if ! awk -v name="$1" -v state="$2" -v autostart="$3" -v expected_pid="$pid" \
+    -v expected_restarts="${4:-}" -v user="$run_user" -v memory_available="$memory_available" '
+    NR == 1 {
+      $1 = $1
+      header = ($0 == "NAME STATE AUTOSTART PID UPTIME RESTARTS USER MEM")
+      next
+    }
+    $1 == name && $2 == state && $3 == autostart {
+      if (state == "active") {
+        process = ($4 == expected_pid && $4 ~ /^[1-9][0-9]*$/ && $5 ~ /^([0-9]+[dhms])+$/)
+      } else {
+        process = ($4 == "-" && $5 == "-")
+      }
+      restarts = ($6 ~ /^[0-9]+$/ && (expected_restarts == "" || $6 == expected_restarts))
+      memory = ($8 ~ /^([0-9]+B|[0-9]+\.[0-9][KMGTPE]iB)$/ || (memory_available == 0 && $8 == "-"))
+      found = (NF == 8 && process && restarts && $7 == user && memory)
+    }
+    END { exit !(header && found) }
+  ' "$scratch/list"; then
     cat "$scratch/list" >&2
-    echo "Missing list row: $1 $2 $3" >&2
+    echo "Unexpected list header or row for $1 ($2, $3)" >&2
     exit 1
   fi
 }
@@ -62,7 +87,7 @@ fi
 "$binary" install "$name" --exec "$program" --workdir "$work" --user "$run_user" -- "${args[@]}"
 systemctl is-active --quiet "$name.service"
 systemctl is-enabled --quiet "$name.service"
-assert_list_row "$name" active enabled
+assert_list_row "$name" active enabled 0
 [[ $(cat "$work/identity") == "$run_user" ]]
 [[ $(cat "$work/cwd") == "$work" ]]
 printf '%s\0' "${args[@]}" > "$scratch/expected"
@@ -84,6 +109,7 @@ for _ in {1..15}; do
   sleep 1
 done
 [[ $recovered == 1 ]]
+assert_list_row "$name" active enabled 1
 "$binary" restart "$name"
 "$binary" stop "$name"
 if systemctl is-active --quiet "$name.service"; then exit 1; fi
