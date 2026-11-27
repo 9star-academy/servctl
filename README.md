@@ -110,7 +110,7 @@ sudo servctl install myapp \
 
 安装会先检查路径和用户、校验 unit，然后启动、设置开机自启并观察进程两秒。检查失败会打印日志并尝试撤销本次安装；如果无法停止/禁用服务，则保留 unit 并明确提示清理失败，便于人工处理。
 
-**进程检查不是业务健康检查。** 安装成功后仍需验证你的端口或健康接口；晚于观察窗口发生的错误请查日志。
+**默认进程检查不是业务健康检查。** 如需自动验证业务就绪，可在 `install` / `start` / `restart` 时传入 `--wait-port` 或 `--health-url`；未传时安装成功后仍需自行验证端口或健康接口，晚于观察窗口发生的错误请查日志。
 
 ```bash
 systemctl is-active myapp       # 预期 active
@@ -163,6 +163,19 @@ sudo servctl install myapp \
 - `--replace`：原地更新已有的 servctl 托管服务（先 `systemd-analyze verify`，原子替换并重启；若启动或就绪检查失败则自动恢复原 unit 配置并重启原服务）。拒绝覆盖非 servctl 托管的系统服务。
 - `--wait-port PORT` / `--health-url URL` / `--ready-timeout DUR`（默认 `15s`）：在确认进程 `active` 后继续等待本机 TCP 端口监听或 HTTP(S) 返回 `2xx`，`install` 与 `start`/`restart` 均支持。
 
+原地更新已有托管服务并附带健康检查示例：
+
+```bash
+sudo servctl install myapp --replace \
+  --exec /www/wwwroot/myapp/myapp \
+  --workdir /www/wwwroot/myapp \
+  --user ubuntu \
+  --env-file /etc/myapp/secrets.env \
+  --wait-port 8200 \
+  --health-url http://127.0.0.1:8200/health \
+  --ready-timeout 20s
+```
+
 ## 日常管理
 
 | 操作 | 命令 |
@@ -193,10 +206,13 @@ sudo servctl install myapp \
 
 ```bash
 servctl status nginx.service
-sudo servctl logs nginx --follow
+servctl show nginx.service
+sudo servctl logs nginx -f -n 100
 sudo servctl start nginx
 sudo servctl stop nginx
 sudo servctl restart nginx
+sudo servctl enable nginx
+sudo servctl disable nginx
 ```
 
 `logs` 读取 systemd journal。服务自己写入的日志文件需按该服务的配置查看。
@@ -206,7 +222,10 @@ sudo servctl restart nginx
 服务较多时，运行以下命令查看清单，无需 `sudo`：
 
 ```bash
-servctl list
+servctl list                # 仅列出 servctl 托管服务
+servctl list --failed       # 仅查看异常失败的服务
+servctl list --all          # 列出系统全部 .service（含非托管）
+servctl list --json         # 输出 JSON（适合脚本/监控采集）
 ```
 
 示例输出（具体状态以当前系统为准）：
@@ -218,7 +237,7 @@ myapp-test  failed    enabled    -      -       5         deploy  -
 worker      inactive  disabled   -      -       0         ubuntu  -
 ```
 
-- 只列出 `/etc/systemd/system/` 中带 servctl 创建标记的普通 `.service` 文件，按服务名排序；跳过系统服务、其他工具创建的服务及符号链接。
+- 默认只列出 `/etc/systemd/system/` 中带 servctl 创建标记的普通 `.service` 文件，按服务名排序；跳过系统服务、其他工具创建的服务及符号链接（加 `--all` 可查看系统全部非模板服务，JSON 输出中通过 `managed` 字段区分）。
 - 包含已停止、启动失败和未设置开机自启的托管服务，不按运行状态筛选。
 - `NAME` 为服务名，不带 `.service`；`STATE` 为运行状态，常见值为 `active`（运行）、`inactive`（停止）、`failed`（失败）。
 - `AUTOSTART` 为开机自启状态，常见值为 `enabled`（已启用）、`disabled`（未启用）；其他状态保留 [systemd 原始值](https://www.freedesktop.org/software/systemd/man/255/org.freedesktop.systemd1.html)。运行状态与开机自启状态分别展示。
@@ -258,7 +277,7 @@ go build -o /tmp/servctl ./cmd/servctl
 sudo bash scripts/test-systemd.sh /tmp/servctl
 ```
 
-检查内容包括运行用户、工作目录、特殊字符参数、active/enabled、重复安装拒绝、异常退出恢复、启停/重启、卸载保留业务文件、启动失败清理、已有服务的运行操作和覆盖/卸载保护，以及 `list` 在运行、停止和失败状态下的列输出及非托管服务过滤。
+检查内容包括运行用户、工作目录、特殊字符参数、环境变量（`--env` / `--env-file`）、资源限制、active/enabled、重复安装拒绝、`install --replace` 原地更新、异常退出恢复、启停/重启、`show`/`enable`/`disable`、卸载保留业务文件、启动失败清理、已有服务的运行操作和覆盖/卸载保护，以及 `list`（含 `--json`）在运行、停止和失败状态下的输出及非托管服务过滤。
 
 GitHub CI 在 Ubuntu 24.04 运行上述实机检查。此脚本不重启主机；开机恢复需在可重启测试机上额外验证：注册测试应用 → 重启 → 检查 `is-active` / `is-enabled` / 应用响应。不要用生产服务器执行重启验证。
 
@@ -282,5 +301,9 @@ checksums.txt
 版本由 tag 注入 `servctl --version`。发布流程会将正式版本设为 latest，并在发布后使用真实下载的安装脚本和 Release 包验证全新安装、从 `v0.1.0` 更新、`list` 可用性，以及更新前后测试服务的配置和进程 PID 保持不变。检查使用临时安装目录和独立命名的测试服务，完成后清理。
 
 只有 Release 和发布后验证都通过，才算完成发布。失败时先查看 Actions 日志；Release 可能已经存在，需要同时确认资产和安装验证结果。
+
+## 开源协议
+
+本项目基于 [MIT License](LICENSE) 开源。
 
 ReedTang666 ♥️ you
