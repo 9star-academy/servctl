@@ -15,7 +15,9 @@ for tool in curl tar sha256sum install mktemp awk; do
   command -v "$tool" >/dev/null 2>&1 || die "缺少命令: $tool"
 done
 
-repo=https://github.com/9star-academy/servctl
+repo=${SERVCTL_REPO_URL:-https://github.com/9star-academy/servctl}
+repo=${repo%/}
+[[ $repo =~ ^https://[^/@[:space:]]+(/.*)?$ ]] || die 'SERVCTL_REPO_URL 必须是有效的 https:// 地址。'
 version=${1:-latest}
 download() {
   curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \

@@ -15,11 +15,19 @@ type Manager struct {
 	UnitDir string
 	Runner  Runner
 	Out     io.Writer
+	Err     io.Writer
 	Observe func(context.Context, time.Duration) error
 }
 
-func NewManager(out io.Writer) *Manager {
-	return &Manager{UnitDir: "/etc/systemd/system", Runner: ExecRunner{}, Out: out, Observe: Wait}
+func NewManager(out, errOut io.Writer) *Manager {
+	return &Manager{UnitDir: "/etc/systemd/system", Runner: ExecRunner{}, Out: out, Err: errOut, Observe: Wait}
+}
+
+func (m *Manager) errWriter() io.Writer {
+	if m.Err != nil {
+		return m.Err
+	}
+	return m.Out
 }
 
 func (m *Manager) Install(ctx context.Context, c Config) error {
@@ -86,24 +94,36 @@ func (m *Manager) Install(ctx context.Context, c Config) error {
 }
 
 func (m *Manager) checkRunning(ctx context.Context, unit string, freshInstall bool) error {
-	if err := m.Observe(ctx, 2*time.Second); err != nil {
-		return err
-	}
-	out, err := m.Runner.Output(ctx, "systemctl", "show", "--property=ActiveState", "--property=NRestarts", unit)
-	if err != nil {
-		return err
-	}
-	values := map[string]string{}
-	for _, line := range strings.Split(string(out), "\n") {
-		key, value, ok := strings.Cut(line, "=")
-		if ok {
-			values[key] = value
+	const (
+		observeTotal = 2 * time.Second
+		observeStep  = 200 * time.Millisecond
+	)
+	var lastOut string
+	var values map[string]string
+	for elapsed := time.Duration(0); elapsed < observeTotal; elapsed += observeStep {
+		if err := m.Observe(ctx, observeStep); err != nil {
+			return err
+		}
+		out, err := m.Runner.Output(ctx, "systemctl", "show", "--property=ActiveState", "--property=NRestarts", unit)
+		if err != nil {
+			return err
+		}
+		lastOut = strings.TrimSpace(string(out))
+		values = map[string]string{}
+		for _, line := range strings.Split(string(out), "\n") {
+			key, value, ok := strings.Cut(line, "=")
+			if ok {
+				values[key] = value
+			}
+		}
+		// Existing services may have historical automatic restarts. Only a new
+		// installation must have zero restarts during its initial observation.
+		if values["ActiveState"] == "failed" || values["ActiveState"] == "inactive" || (freshInstall && values["NRestarts"] != "0") {
+			return fmt.Errorf("服务 %s 启动检查未通过: %s", unit, lastOut)
 		}
 	}
-	// Existing services may have historical automatic restarts. Only a new
-	// installation must have zero restarts during its initial observation.
-	if values["ActiveState"] != "active" || (freshInstall && values["NRestarts"] != "0") {
-		return fmt.Errorf("服务 %s 启动检查未通过: %s", unit, strings.TrimSpace(string(out)))
+	if values["ActiveState"] != "active" {
+		return fmt.Errorf("服务 %s 启动检查未通过: %s", unit, lastOut)
 	}
 	return nil
 }
@@ -168,9 +188,9 @@ func (m *Manager) Action(ctx context.Context, action, name string, follow bool) 
 		if follow {
 			args = append(args, "--follow")
 		}
-		return m.Runner.Stream(ctx, m.Out, "journalctl", args...)
+		return m.Runner.Stream(ctx, m.Out, m.errWriter(), "journalctl", args...)
 	case "status":
-		return m.Runner.Stream(ctx, m.Out, "systemctl", "status", "--no-pager", "--full", "--", unit)
+		return m.Runner.Stream(ctx, m.Out, m.errWriter(), "systemctl", "status", "--no-pager", "--full", "--", unit)
 	case "start", "restart", "stop":
 		if _, err := m.Runner.Output(ctx, "systemctl", action, "--", unit); err != nil {
 			m.diagnostics(unit)

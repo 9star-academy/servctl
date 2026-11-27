@@ -54,7 +54,7 @@ curl -fsSL https://raw.githubusercontent.com/9star-academy/servctl/main/scripts/
 ```bash
 curl -fL https://raw.githubusercontent.com/9star-academy/servctl/main/scripts/install.sh -o /tmp/servctl-install.sh
 less /tmp/servctl-install.sh
-sudo bash /tmp/servctl-install.sh v0.1.1
+sudo bash /tmp/servctl-install.sh v0.3.0
 ```
 
 验证安装：
@@ -65,7 +65,7 @@ servctl --help
 servctl list
 ```
 
-如需自定义工具安装目录，可用 `sudo env SERVCTL_INSTALL_DIR=/opt/bin bash /tmp/servctl-install.sh`；需要自行将该目录加入 PATH。再次运行安装脚本会更新 CLI，不重启或修改已经注册的业务服务。
+如需自定义工具安装目录，可用 `sudo env SERVCTL_INSTALL_DIR=/opt/bin bash /tmp/servctl-install.sh`；需要自行将该目录加入 PATH。如服务器访问 GitHub 受限，可通过 `SERVCTL_REPO_URL=https://你的镜像地址/9star-academy/servctl` 指定镜像仓库（`install.sh` 与 `servctl update` 均支持，且仍强制 HTTPS 与 SHA-256 校验）。再次运行安装脚本会更新 CLI，不重启或修改已经注册的业务服务。
 
 如果提示“仓库尚未发布正式 Release”（旧脚本提示“无法解析最新 Release”），请先检查 [Releases](https://github.com/9star-academy/servctl/releases)。源码已推送到 `main` 不代表二进制已发布；需要按本文末尾的发布步骤创建正式版本，并确认包含 `servctl_linux_amd64.tar.gz`、`servctl_linux_arm64.tar.gz` 和 `checksums.txt`。如果发布未完成，请检查 [Actions](https://github.com/9star-academy/servctl/actions) 的失败日志；修复后再发布。
 
@@ -234,8 +234,8 @@ GitHub CI 在 Ubuntu 24.04 运行上述实机检查。此脚本不重启主机�
 发布流程位于 `.github/workflows/release.yml`。在代码已审核、提交并推送且 CI 通过后，由维护者创建版本 tag：
 
 ```bash
-git tag v0.1.1
-git push origin v0.1.1
+git tag v0.3.0
+git push origin v0.3.0
 ```
 
 Release workflow 先执行测试及 systemd 冒烟检查，再构建并发布：

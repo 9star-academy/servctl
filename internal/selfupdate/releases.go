@@ -8,18 +8,36 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
 
+const defaultRepoURL = "https://github.com/9star-academy/servctl"
+
 type releases struct {
-	repo   string
-	client *http.Client
+	repo    string
+	repoErr error
+	client  *http.Client
+}
+
+func resolveRepoURL(raw string) (string, error) {
+	trimmed := strings.TrimRight(strings.TrimSpace(raw), "/")
+	if trimmed == "" {
+		return defaultRepoURL, nil
+	}
+	u, err := url.Parse(trimmed)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("SERVCTL_REPO_URL 必须是有效的 https:// 地址: %q", raw)
+	}
+	return trimmed, nil
 }
 
 func newReleases() releases {
+	repo, err := resolveRepoURL(os.Getenv("SERVCTL_REPO_URL"))
 	return releases{
-		repo: "https://github.com/9star-academy/servctl",
+		repo:    repo,
+		repoErr: err,
 		client: &http.Client{
 			Timeout: 3 * time.Minute,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -33,6 +51,9 @@ func newReleases() releases {
 }
 
 func (r releases) latest(ctx context.Context) (string, error) {
+	if r.repoErr != nil {
+		return "", r.repoErr
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.repo+"/releases/latest", nil)
 	if err != nil {
 		return "", err
@@ -62,6 +83,9 @@ func (r releases) latest(ctx context.Context) (string, error) {
 }
 
 func (r releases) download(ctx context.Context, version, goarch string) ([]byte, error) {
+	if r.repoErr != nil {
+		return nil, r.repoErr
+	}
 	if goarch != "amd64" && goarch != "arm64" {
 		return nil, fmt.Errorf("不支持的 CPU 架构: %s", goarch)
 	}

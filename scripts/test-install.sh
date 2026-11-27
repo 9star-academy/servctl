@@ -44,9 +44,9 @@ while [ "$#" -gt 0 ]; do
 done
 [ "${TEST_DOWNLOAD_FAIL:-0}" = 0 ] || exit 22
 case "$url" in
- https://github.com/9star-academy/servctl/releases/latest)
-  printf '%s' "${TEST_RELEASE_URL:-https://github.com/9star-academy/servctl/releases/tag/v0.1.0}";;
- https://github.com/9star-academy/servctl/releases/download/v0.1.0/*)
+ https://github.com/9star-academy/servctl/releases/latest|https://mirror.example.com/servctl/releases/latest)
+  printf '%s' "${TEST_RELEASE_URL:-${url%/latest}/tag/v0.1.0}";;
+ https://github.com/9star-academy/servctl/releases/download/v0.1.0/*|https://mirror.example.com/servctl/releases/download/v0.1.0/*)
   cp "$SERVCTL_FIXTURE/release/${url##*/}" "$output";;
  *) echo "Unexpected download: $url" >&2; exit 1;;
 esac
@@ -69,7 +69,10 @@ bash "$root/scripts/install.sh"
 [[ $("$fixture/target/servctl" --version) == 'servctl v0.1.0' ]]
 TEST_ARCH=aarch64 bash "$root/scripts/install.sh" v0.1.0
 [[ $("$fixture/target/servctl" --version) == 'servctl v0.1.0' ]]
+SERVCTL_REPO_URL=https://mirror.example.com/servctl/ bash "$root/scripts/install.sh"
+[[ $("$fixture/target/servctl" --version) == 'servctl v0.1.0' ]]
 printf 'keep-existing' > "$fixture/target/servctl"
+SERVCTL_REPO_URL=http://mirror.example.com/servctl expect_fail
 TEST_RELEASE_URL=https://github.com/9star-academy/servctl/releases expect_fail
 grep -q '尚未发布正式 Release' "$fixture/output"
 grep -q 'checksums.txt' "$fixture/output"

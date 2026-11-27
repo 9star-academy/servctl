@@ -58,25 +58,29 @@ func (c Config) Validate() error {
 	if strings.HasSuffix(filepath.Clean(c.WorkDir), " ") {
 		return fmt.Errorf("工作目录末尾不能是空格：systemd 可能丢失末尾空格，导致服务启动失败")
 	}
-	info, err := os.Stat(c.Executable)
+	execInfo, err := os.Stat(c.Executable)
 	if err != nil {
 		return fmt.Errorf("读取程序: %w", err)
 	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 {
+	if !execInfo.Mode().IsRegular() || execInfo.Mode().Perm()&0111 == 0 {
 		return fmt.Errorf("程序不是可执行普通文件: %s（请检查 chmod +x）", c.Executable)
 	}
-	info, err = os.Stat(c.WorkDir)
+	workInfo, err := os.Stat(c.WorkDir)
 	if err != nil {
 		return fmt.Errorf("读取工作目录: %w", err)
 	}
-	if !info.IsDir() {
+	if !workInfo.IsDir() {
 		return fmt.Errorf("工作目录不是目录: %s", c.WorkDir)
 	}
 	if !userName.MatchString(c.User) {
 		return fmt.Errorf("请通过 --user 指定有效的现有运行用户")
 	}
-	if _, err = user.Lookup(c.User); err != nil {
+	u, err := user.Lookup(c.User)
+	if err != nil {
 		return fmt.Errorf("查询运行用户 %s: %w", c.User, err)
+	}
+	if err := checkUserAccess(u, c.Executable, execInfo, c.WorkDir, workInfo); err != nil {
+		return err
 	}
 	for _, arg := range c.Args {
 		if strings.ContainsRune(arg, 0) || !utf8.ValidString(arg) {

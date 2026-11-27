@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -33,7 +35,7 @@ func testApp(t *testing.T) (*App, *fakeBackend, *bytes.Buffer) {
 	t.Helper()
 	b := &fakeBackend{}
 	out := &bytes.Buffer{}
-	return &App{Backend: b, Out: out, Err: out, Version: "v0.1.0", GOOS: "linux", EUID: 0, Cwd: t.TempDir(), CheckSystem: func() error { return nil }}, b, out
+	return &App{Backend: b, Out: out, Err: out, Version: "v0.1.0", GOOS: "linux", EUID: 0, Cwd: t.TempDir(), CheckSystem: func(string) error { return nil }}, b, out
 }
 
 func TestInstallParsesNameFirstAndLiteralArgs(t *testing.T) {
@@ -84,7 +86,7 @@ func TestRuntimeGuards(t *testing.T) {
 			case "root":
 				a.EUID = 1000
 			case "system":
-				a.CheckSystem = func() error { return errors.New("not booted") }
+				a.CheckSystem = func(string) error { return errors.New("not booted") }
 			}
 			if a.Run(context.Background(), []string{"stop", "admin"}) == 0 {
 				t.Fatal("accepted")
@@ -211,7 +213,7 @@ func TestListRuntimeGuardsAndErrors(t *testing.T) {
 			case "platform":
 				a.GOOS = "darwin"
 			case "system":
-				a.CheckSystem = func() error { return errors.New("not booted") }
+				a.CheckSystem = func(string) error { return errors.New("not booted") }
 			case "backend":
 				b.err = errors.New("list failed")
 			case "cancelled":
@@ -264,7 +266,7 @@ func TestUpdateCommand(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			a, b, out := testApp(t)
 			a.GOOS, a.EUID = tt.platform, 1000
-			a.CheckSystem = func() error {
+			a.CheckSystem = func(string) error {
 				t.Fatal("update queried systemd")
 				return nil
 			}
@@ -286,5 +288,33 @@ func TestUpdateCommand(t *testing.T) {
 				t.Fatalf("update called service backend: %+v", b)
 			}
 		})
+	}
+}
+
+func TestStatusPreservesExitCodeWithoutNoise(t *testing.T) {
+	a, b, out := testApp(t)
+	err := exec.Command("sh", "-c", "exit 3").Run()
+	if err == nil {
+		t.Fatal("expected exit 3")
+	}
+	b.err = fmt.Errorf("systemctl: %w", err)
+	if code := a.Run(context.Background(), []string{"status", "admin"}); code != 3 {
+		t.Fatalf("exit = %d, want 3 (out=%q)", code, out.String())
+	}
+	if out.Len() != 0 {
+		t.Fatalf("unexpected error noise on status exit 3: %q", out.String())
+	}
+}
+
+func TestLogsFollowCtrlCExitsSilently(t *testing.T) {
+	a, b, out := testApp(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	b.err = context.Canceled
+	if code := a.Run(ctx, []string{"logs", "admin", "--follow"}); code != 130 {
+		t.Fatalf("exit = %d, want 130", code)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("unexpected error noise on logs --follow cancel: %q", out.String())
 	}
 }

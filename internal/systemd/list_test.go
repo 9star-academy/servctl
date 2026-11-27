@@ -48,14 +48,41 @@ func TestListFiltersUnmanagedAndIncludesStoppedAndFailed(t *testing.T) {
 	if strings.Join(rows, "\n") != want {
 		t.Fatalf("unexpected list:\n%s", out.String())
 	}
-	if len(r.calls) != 3 {
-		t.Fatalf("queried unmanaged services: %v", r.calls)
+	if len(r.calls) != 1 {
+		t.Fatalf("expected single batched query, got %v", r.calls)
 	}
-	const query = "systemctl show --property=ActiveState --property=UnitFileState --property=MainPID --property=ActiveEnterTimestampMonotonic --property=NRestarts --property=User --property=MemoryCurrent "
-	for i, unit := range []string{"a-stopped.service", "m-failed.service", "z-active.service"} {
-		if r.calls[i] != query+unit {
-			t.Fatalf("unexpected list query: %s", r.calls[i])
-		}
+	const wantQuery = "systemctl show --property=ActiveState --property=UnitFileState --property=MainPID --property=ActiveEnterTimestampMonotonic --property=NRestarts --property=User --property=MemoryCurrent -- a-stopped.service m-failed.service z-active.service"
+	if r.calls[0] != wantQuery {
+		t.Fatalf("unexpected list query: %s", r.calls[0])
+	}
+}
+
+func TestListSkipsUnreadableForeignUnit(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can read mode 0000 files")
+	}
+	m, r := testManager(t)
+	var out bytes.Buffer
+	m.Out = &out
+	unreadable := filepath.Join(m.UnitDir, "secret.service")
+	if err := os.WriteFile(unreadable, []byte("[Service]\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(unreadable, 0000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(unreadable, 0600) })
+	if err := os.WriteFile(filepath.Join(m.UnitDir, "myapp.service"), []byte(Marker+"[Service]\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	r.states = map[string]string{
+		"myapp.service": "ActiveState=active\nUnitFileState=enabled\nMainPID=123\nNRestarts=0\nUser=ubuntu\n",
+	}
+	if err := m.List(context.Background()); err != nil {
+		t.Fatalf("unexpected error with unreadable foreign unit: %v", err)
+	}
+	if !strings.Contains(out.String(), "myapp") {
+		t.Fatalf("missing managed service in output:\n%s", out.String())
 	}
 }
 

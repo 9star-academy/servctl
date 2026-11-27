@@ -58,9 +58,15 @@ type App struct {
 	Out, Err           io.Writer
 	Version, GOOS, Cwd string
 	EUID               int
-	CheckSystem        func() error
+	CheckSystem        func(string) error
 	update             func(context.Context, string, io.Writer) error
 }
+
+type silentExitError struct {
+	code int
+}
+
+func (e silentExitError) Error() string { return "" }
 
 func New(version string, out, errOut io.Writer) (*App, error) {
 	cwd, err := os.Getwd()
@@ -68,17 +74,24 @@ func New(version string, out, errOut io.Writer) (*App, error) {
 		return nil, err
 	}
 	return &App{
-		Backend: systemd.NewManager(out), Out: out, Err: errOut,
+		Backend: systemd.NewManager(out, errOut), Out: out, Err: errOut,
 		Version: version, GOOS: runtime.GOOS, EUID: os.Geteuid(), Cwd: cwd,
 		CheckSystem: checkSystem, update: selfupdate.Run,
 	}, nil
 }
 
-func checkSystem() error {
+func checkSystem(action string) error {
 	if _, err := os.Stat("/run/systemd/system"); err != nil {
 		return fmt.Errorf("系统未运行 systemd（容器需以 systemd 启动）: %w", err)
 	}
-	for _, name := range []string{"systemctl", "systemd-analyze", "journalctl"} {
+	tools := []string{"systemctl"}
+	switch action {
+	case "install":
+		tools = append(tools, "systemd-analyze")
+	case "logs":
+		tools = append(tools, "journalctl")
+	}
+	for _, name := range tools {
 		if _, err := exec.LookPath(name); err != nil {
 			return err
 		}
@@ -90,6 +103,10 @@ func (a *App) Run(ctx context.Context, args []string) int {
 	err := a.run(ctx, args)
 	if err == nil || errors.Is(err, flag.ErrHelp) {
 		return 0
+	}
+	var silent silentExitError
+	if errors.As(err, &silent) {
+		return silent.code
 	}
 	fmt.Fprintf(a.Err, "错误: %v\n", err)
 	if ctx.Err() != nil {
@@ -194,7 +211,7 @@ func (a *App) run(ctx context.Context, args []string) error {
 	if action != "status" && action != "logs" && action != "list" && a.EUID != 0 {
 		return fmt.Errorf("此操作需要 root 权限，请使用 sudo servctl %s ...", action)
 	}
-	if err := a.CheckSystem(); err != nil {
+	if err := a.CheckSystem(action); err != nil {
 		return err
 	}
 	if action == "install" {
@@ -203,5 +220,17 @@ func (a *App) run(ctx context.Context, args []string) error {
 	if action == "list" {
 		return a.Backend.List(ctx)
 	}
-	return a.Backend.Action(ctx, action, name, follow)
+	err := a.Backend.Action(ctx, action, name, follow)
+	if err != nil {
+		if action == "status" {
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) {
+				return silentExitError{code: exitErr.ExitCode()}
+			}
+		}
+		if action == "logs" && follow && ctx.Err() != nil {
+			return silentExitError{code: 130}
+		}
+	}
+	return err
 }

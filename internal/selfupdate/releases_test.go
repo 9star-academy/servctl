@@ -105,3 +105,22 @@ func TestReleasesDownload(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveRepoURL(t *testing.T) {
+	for _, tt := range []struct {
+		raw  string
+		want string
+	}{
+		{"", defaultRepoURL},
+		{"  ", defaultRepoURL},
+		{"https://mirror.example.com/9star-academy/servctl/", "https://mirror.example.com/9star-academy/servctl"},
+		{"http://mirror.example.com/9star-academy/servctl", ""},
+		{"https://user:pass@mirror.example.com/repo", ""},
+		{"https://mirror.example.com/repo?x=1", ""},
+	} {
+		got, err := resolveRepoURL(tt.raw)
+		if got != tt.want || (err == nil) != (tt.want != "") {
+			t.Errorf("resolveRepoURL(%q) = %q, %v; want %q", tt.raw, got, err, tt.want)
+		}
+	}
+}

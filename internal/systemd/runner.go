@@ -11,7 +11,7 @@ import (
 
 type Runner interface {
 	Output(context.Context, string, ...string) ([]byte, error)
-	Stream(context.Context, io.Writer, string, ...string) error
+	Stream(context.Context, io.Writer, io.Writer, string, ...string) error
 }
 
 type ExecRunner struct{}
@@ -26,10 +26,10 @@ func (ExecRunner) Output(ctx context.Context, name string, args ...string) ([]by
 	return out, nil
 }
 
-func (ExecRunner) Stream(ctx context.Context, w io.Writer, name string, args ...string) error {
+func (ExecRunner) Stream(ctx context.Context, stdout, stderr io.Writer, name string, args ...string) error {
 	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Stdout = w
-	cmd.Stderr = w
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("%s: %w", name, err)
 	}

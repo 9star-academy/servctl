@@ -105,3 +105,19 @@ func TestWorkingDirectoryTrailingSpace(t *testing.T) {
 		t.Fatalf("rejected space in an intermediate component: %v", err)
 	}
 }
+
+func TestConfigValidationRejectsInaccessibleUserPermissions(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses unix permission checks")
+	}
+	c := testConfig(t)
+	// Mode 0001 has an execute bit set, but the owner (current user) is denied execute.
+	if err := os.Chmod(c.Executable, 0001); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(c.Executable, 0755) })
+	err := c.Validate()
+	if err == nil || !strings.Contains(err.Error(), "无权执行程序") {
+		t.Fatalf("expected user execute permission error, got %v", err)
+	}
+}

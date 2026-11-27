@@ -29,7 +29,17 @@ func (r *fakeRunner) Output(_ context.Context, name string, args ...string) ([]b
 		return []byte("simulated failure"), errors.New("exit 1")
 	}
 	if strings.Contains(s, "--property=UnitFileState") {
-		return []byte(r.states[args[len(args)-1]]), nil
+		units := args
+		if idx := slices.Index(args, "--"); idx >= 0 {
+			units = args[idx+1:]
+		} else {
+			units = args[len(args)-1:]
+		}
+		var blocks []string
+		for _, unit := range units {
+			blocks = append(blocks, strings.TrimRight(r.states[unit], "\n"))
+		}
+		return []byte(strings.Join(blocks, "\n\n") + "\n"), nil
 	}
 	if strings.Contains(s, "--property=LoadState") {
 		if r.existing {
@@ -62,9 +72,9 @@ func TestStartAcceptsActiveServiceWithHistoricalRestarts(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-func (r *fakeRunner) Stream(ctx context.Context, w io.Writer, name string, args ...string) error {
+func (r *fakeRunner) Stream(ctx context.Context, stdout, _ io.Writer, name string, args ...string) error {
 	out, err := r.Output(ctx, name, args...)
-	_, _ = w.Write(out)
+	_, _ = stdout.Write(out)
 	return err
 }
 func testManager(t *testing.T) (*Manager, *fakeRunner) {
@@ -130,8 +140,16 @@ func TestInstallFailures(t *testing.T) {
 func TestFailedProcessRollsBack(t *testing.T) {
 	m, r := testManager(t)
 	r.inactive = true
+	var observed []time.Duration
+	m.Observe = func(_ context.Context, d time.Duration) error {
+		observed = append(observed, d)
+		return nil
+	}
 	if m.Install(context.Background(), testConfig(t)) == nil {
 		t.Fatal("reported failed service as success")
+	}
+	if len(observed) != 1 || observed[0] >= time.Second {
+		t.Fatalf("expected fast-fail observation, got %v", observed)
 	}
 	if _, err := os.Stat(filepath.Join(m.UnitDir, "admin.service")); !os.IsNotExist(err) {
 		t.Fatal("unit left")
