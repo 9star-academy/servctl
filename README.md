@@ -131,32 +131,65 @@ sudo servctl install myapp \
   -- --port 8200
 ```
 
-`--port` 只是示例，以你应用实际支持的参数为准。参数原样传递，不经过 shell；`$HOME`、`%n` 等不会由 systemd 展开。参数里不要放密码，因为 unit 文件可被本机用户读取。
+- `--port` 只是示例，以你应用实际支持的参数为准。参数原样传递，不经过 shell；`$HOME`、`%n` 等不会由 systemd 展开。参数里不要放密码，因为 unit 文件可被本机用户读取。
+
+### 环境变量与常用服务配置
+
+`install` 支持通过参数配置环境变量、资源限制、重启策略和启动顺序依赖：
+
+```bash
+sudo servctl install myapp \
+  --exec /www/wwwroot/myapp/myapp \
+  --workdir /www/wwwroot/myapp \
+  --user ubuntu \
+  --env APP_ENV=production \
+  --env-file /etc/myapp/secrets.env \
+  --desc "MyApp API" \
+  --restart on-failure \
+  --restart-sec 5s \
+  --memory-max 512M \
+  --cpu-quota 150% \
+  --after postgresql.service \
+  -- --port 8200
+```
+
+- `--env KEY=VALUE`：设置单个环境变量，可重复指定。含密码等敏感信息建议使用 `--env-file`。
+- `--env-file PATH`：通过 systemd 原生 `EnvironmentFile=` 加载环境变量文件，可重复指定；文件可设为 `0600 root:root`，由 systemd 在降权前读取，避免敏感信息暴露在 `0644` 的 unit 文件中。
+- `--desc`：自定义服务描述（默认 `servctl service <NAME>`）。
+- `--restart` / `--restart-sec`：覆盖重启策略（默认 `on-failure`）和重启间隔（默认 `3`）。
+- `--memory-max` / `--cpu-quota`：通过 cgroup 限制服务内存上限（如 `512M`、`1G`）和 CPU 配额（如 `50%`、`200%`）。
+- `--after`：追加启动顺序依赖（如 `postgresql.service`、`redis.service`），可重复指定。
+- `--no-enable` / `--no-start`：按需跳过开机自启或跳过立即启动。
+- `--replace`：原地更新已有的 servctl 托管服务（先 `systemd-analyze verify`，原子替换并重启；若启动或就绪检查失败则自动恢复原 unit 配置并重启原服务）。拒绝覆盖非 servctl 托管的系统服务。
+- `--wait-port PORT` / `--health-url URL` / `--ready-timeout DUR`（默认 `15s`）：在确认进程 `active` 后继续等待本机 TCP 端口监听或 HTTP(S) 返回 `2xx`，`install` 与 `start`/`restart` 均支持。
 
 ## 日常管理
 
 | 操作 | 命令 |
 | --- | --- |
-| 列出所有托管服务 | `servctl list` |
+| 列出所有托管服务 | `servctl list`（支持 `--json`、`--all`、`--failed`） |
+| 查看服务配置 | `servctl show myapp` |
 | 查看状态 | `servctl status myapp` |
 | 查看最近 50 行日志 | `sudo servctl logs myapp` |
-| 持续查看日志，Ctrl-C 退出 | `sudo servctl logs myapp --follow` |
-| 重启服务 | `sudo servctl restart myapp` |
+| 持续查看日志，Ctrl-C 退出 | `sudo servctl logs myapp -f`（或 `--follow`） |
+| 按行数、时间或级别过滤日志 | `sudo servctl logs myapp -n 200 --since "1 hour ago" --level err` |
+| 重启服务 | `sudo servctl restart myapp`（可选 `--wait-port` / `--health-url`） |
 | 停止服务 | `sudo servctl stop myapp` |
-| 启动服务 | `sudo servctl start myapp` |
+| 启动服务 | `sudo servctl start myapp`（可选 `--wait-port` / `--health-url`） |
+| 开启 / 关闭开机自启 | `sudo servctl enable myapp` / `sudo servctl disable myapp` |
 | 卸载服务 | `sudo servctl uninstall myapp` |
 
-- `stop` 只停止当前运行，保留开机自启；`start` 不修改自启设置。
-- servctl 创建的服务使用 `Restart=on-failure`，异常退出后等待 3 秒重试，60 秒内最多启动 5 次。正常退出、手动停止不会自动重启；触发限流后修复问题，再执行 `sudo systemctl reset-failed myapp` 和 `sudo servctl start myapp`。
-- `status` 对停止/失败的服务保留非零退出码；查看日志的权限由系统控制，权限不足请加 `sudo`。
-- 同名服务一律拒绝覆盖，包括系统已有服务、其他工具创建的服务和被 mask 的服务。
+- `stop` 只停止当前运行，保留开机自启；`start` 不修改自启设置；`enable` / `disable` 仅切换开机自启，不启停当前进程。
+- servctl 创建的服务默认使用 `Restart=on-failure`，异常退出后等待 3 秒重试，60 秒内最多启动 5 次（可通过 `--restart` / `--restart-sec` 覆盖）。正常退出、手动停止不会自动重启；触发限流后修复问题，再执行 `sudo systemctl reset-failed myapp` 和 `sudo servctl start myapp`。
+- `status` 透传 `systemctl status` 的退出码（例如已停止服务返回 `3`）；查看日志的权限由系统控制，权限不足请加 `sudo`。
+- 同名服务默认拒绝覆盖，包括系统已有服务、其他工具创建的服务和被 mask 的服务；修改已有托管服务参数可使用 `servctl install myapp --replace ...` 原地更新。
 - `uninstall` 只接受 `/etc/systemd/system/` 中带 servctl 标记的普通服务文件。它会停止并禁用服务、移除 unit，**不会删除程序、配置、日志或数据库**。
-- 更新程序可先 `stop`，替换可执行文件后 `start`。第一版不提供零停机更新、自动构建、文件上传或应用版本回滚。更改安装参数需先卸载再重新注册，会有停机。
-- systemd 不继承你交互式终端的完整环境；第一版不提供环境变量配置参数，使用应用已有配置文件。
+- 更新程序可先 `stop`，替换可执行文件后 `start`，或通过 `install --replace` 原地变更配置。不提供零停机更新、自动构建、文件上传或应用版本回滚。
+- systemd 不继承你交互式终端的完整环境；如需环境变量请使用 `--env` 或 `--env-file`。
 
 ### 操作已有的系统服务
 
-`status`、`logs`、`start`、`stop` 和 `restart` 可用于系统包安装或手工创建的 systemd 服务。支持简写、完整的 `.service` 名称以及 `getty@tty1.service` 这样的实例名。
+`status`、`show`、`logs`、`start`、`stop`、`restart`、`enable` 和 `disable` 可用于系统包安装或手工创建的 systemd 服务。支持简写、完整的 `.service` 名称以及 `getty@tty1.service` 这样的实例名。
 
 ```bash
 servctl status nginx.service
@@ -194,7 +227,7 @@ worker      inactive  disabled   -      -       0         ubuntu  -
 - `RESTARTS` 为 systemd 当前记录的自动重启次数。计数可能重置，无值时显示 `-`。
 - `USER` 为服务配置的运行账号。无值时显示 `-`。
 - `MEM` 为整个服务（含子进程）当前占用的内存。没有可用统计时显示 `-`。
-- 没有托管服务时显示“暂无 servctl 创建的服务。”；读取目录、文件或查询状态失败时返回非零退出码。此命令只查询，不启动、停止或修改服务。
+- 没有托管服务时显示“暂无 servctl 创建的服务。”；支持 `--json`（输出结构化 JSON，适合脚本和监控采集）、`--all`（包含系统内非 servctl 托管的服务）以及 `--failed`（仅筛选 `failed` 状态服务）。在交互式终端中按状态自动高亮着色，管道输出或设置 `NO_COLOR=1` 时自动关闭。读取目录、文件或查询状态失败时返回非零退出码。此命令只查询，不启动、停止或修改服务。
 
 ## 开发和验证
 

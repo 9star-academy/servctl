@@ -3,6 +3,7 @@ package systemd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,7 +35,7 @@ func TestListFiltersUnmanagedAndIncludesStoppedAndFailed(t *testing.T) {
 		"a-stopped.service": "ActiveState=inactive\nUnitFileState=disabled\nMainPID=0\nActiveEnterTimestampMonotonic=1\nNRestarts=0\nUser=ubuntu\nMemoryCurrent=[not set]\n",
 		"m-failed.service":  "ActiveState=failed\nUnitFileState=enabled\nMainPID=0\nActiveEnterTimestampMonotonic=1\nNRestarts=5\nUser=deploy\n",
 	}
-	if err := m.List(context.Background()); err != nil {
+	if err := m.List(context.Background(), ListOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	rows := strings.Split(strings.TrimSpace(out.String()), "\n")
@@ -78,11 +79,68 @@ func TestListSkipsUnreadableForeignUnit(t *testing.T) {
 	r.states = map[string]string{
 		"myapp.service": "ActiveState=active\nUnitFileState=enabled\nMainPID=123\nNRestarts=0\nUser=ubuntu\n",
 	}
-	if err := m.List(context.Background()); err != nil {
+	if err := m.List(context.Background(), ListOptions{}); err != nil {
 		t.Fatalf("unexpected error with unreadable foreign unit: %v", err)
 	}
 	if !strings.Contains(out.String(), "myapp") {
 		t.Fatalf("missing managed service in output:\n%s", out.String())
+	}
+}
+
+func TestListJSONFailedAndAll(t *testing.T) {
+	m, r := testManager(t)
+	var out bytes.Buffer
+	m.Out = &out
+	if err := os.WriteFile(filepath.Join(m.UnitDir, "app.service"), []byte(Marker+"[Service]\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	r.unitFiles = "app.service enabled\nnginx.service enabled\ngetty@.service static\n"
+	r.states = map[string]string{
+		"app.service":   "ActiveState=failed\nUnitFileState=enabled\nMainPID=0\nNRestarts=3\nUser=ubuntu\n",
+		"nginx.service": "ActiveState=active\nUnitFileState=enabled\nMainPID=42\nNRestarts=0\nUser=www-data\n",
+	}
+
+	// --all --json includes managed & unmanaged and skips templates.
+	if err := m.List(context.Background(), ListOptions{All: true, JSON: true}); err != nil {
+		t.Fatal(err)
+	}
+	var got []ServiceSummary
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("invalid json: %v\n%s", err, out.String())
+	}
+	if len(got) != 2 || got[0].Name != "app" || !got[0].Managed || got[1].Name != "nginx" || got[1].Managed {
+		t.Fatalf("unexpected json list: %+v", got)
+	}
+
+	// --all --failed filters to failed only.
+	out.Reset()
+	if err := m.List(context.Background(), ListOptions{All: true, Failed: true, JSON: true}); err != nil {
+		t.Fatal(err)
+	}
+	got = nil
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Name != "app" || got[0].State != "failed" {
+		t.Fatalf("unexpected failed list: %+v", got)
+	}
+}
+
+func TestColorizeListOutput(t *testing.T) {
+	table := "NAME    STATE     AUTOSTART\n" +
+		"app     active    enabled\n" +
+		"broken  failed    enabled\n" +
+		"idle    inactive  disabled\n"
+	items := []ServiceSummary{
+		{Name: "app", State: "active"},
+		{Name: "broken", State: "failed"},
+		{Name: "idle", State: "inactive"},
+	}
+	colored := colorizeListOutput(table, items)
+	for _, want := range []string{"\x1b[32mactive\x1b[0m", "\x1b[31mfailed\x1b[0m", "\x1b[2minactive\x1b[0m"} {
+		if !strings.Contains(colored, want) {
+			t.Fatalf("missing %q in %q", want, colored)
+		}
 	}
 }
 
@@ -93,7 +151,7 @@ func TestListEmptyDoesNotQuerySystemd(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(m.UnitDir, "foreign.service"), []byte("[Service]\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.List(context.Background()); err != nil {
+	if err := m.List(context.Background(), ListOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "暂无 servctl 创建的服务") || len(r.calls) != 0 {
@@ -119,7 +177,7 @@ func TestListReportsDirectoryAndSystemdErrors(t *testing.T) {
 					r.states = map[string]string{"admin.service": "ActiveState=active\n"}
 				}
 			}
-			if err := m.List(context.Background()); err == nil {
+			if err := m.List(context.Background(), ListOptions{}); err == nil {
 				t.Fatal("lost listing error")
 			}
 			if out.Len() != 0 {

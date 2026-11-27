@@ -49,6 +49,17 @@ func TestConfigValidation(t *testing.T) {
 		{"unknown user", func(c *Config) { c.User = "servctl_no_such_user_12345" }},
 		{"user injection", func(c *Config) { c.User = "root\nExecStart=/bad" }},
 		{"argument NUL", func(c *Config) { c.Args = []string{"bad\x00arg"} }},
+		{"env missing equals", func(c *Config) { c.Env = []string{"NOEQUALS"} }},
+		{"env bad key", func(c *Config) { c.Env = []string{"1BAD=val"} }},
+		{"env NUL value", func(c *Config) { c.Env = []string{"KEY=bad\x00val"} }},
+		{"env-file missing", func(c *Config) { c.EnvFiles = []string{"/no/such/servctl.env"} }},
+		{"env-file directory", func(c *Config) { c.EnvFiles = []string{c.WorkDir} }},
+		{"desc newline", func(c *Config) { c.Description = "bad\nExecStart=/evil" }},
+		{"invalid restart", func(c *Config) { c.Restart = "forever" }},
+		{"invalid restart-sec", func(c *Config) { c.RestartSec = "3d" }},
+		{"invalid memory-max", func(c *Config) { c.MemoryMax = "512MB" }},
+		{"invalid cpu-quota", func(c *Config) { c.CPUQuota = "50" }},
+		{"invalid after", func(c *Config) { c.After = []string{"bad unit"} }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -119,5 +130,41 @@ func TestConfigValidationRejectsInaccessibleUserPermissions(t *testing.T) {
 	err := c.Validate()
 	if err == nil || !strings.Contains(err.Error(), "无权执行程序") {
 		t.Fatalf("expected user execute permission error, got %v", err)
+	}
+}
+
+func TestRenderOptionalDirectives(t *testing.T) {
+	c := testConfig(t)
+	envFile := filepath.Join(c.WorkDir, "app.env")
+	if err := os.WriteFile(envFile, []byte("SECRET=123\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c.Description = "My App 100%"
+	c.Env = []string{"PORT=8200", "NOTE=a b;100%"}
+	c.EnvFiles = []string{envFile}
+	c.Restart = "always"
+	c.RestartSec = "5s"
+	c.MemoryMax = "512M"
+	c.CPUQuota = "150%"
+	c.After = []string{"network.target", "postgresql.service", "redis"}
+	data, err := c.Render()
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		"Description=My App 100%%",
+		"After=network.target postgresql.service redis.service",
+		"EnvironmentFile=" + envFile,
+		`Environment="PORT=8200"`,
+		`Environment="NOTE=a b\x3b100%%"`,
+		"Restart=always",
+		"RestartSec=5s",
+		"MemoryMax=512M",
+		"CPUQuota=150%",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in:\n%s", want, text)
+		}
 	}
 }

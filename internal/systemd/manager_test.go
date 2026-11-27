@@ -20,6 +20,7 @@ type fakeRunner struct {
 	previousRestarts bool
 	unitID           string
 	states           map[string]string
+	unitFiles        string
 }
 
 func (r *fakeRunner) Output(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -27,6 +28,9 @@ func (r *fakeRunner) Output(_ context.Context, name string, args ...string) ([]b
 	r.calls = append(r.calls, s)
 	if r.fail != "" && strings.Contains(s, r.fail) {
 		return []byte("simulated failure"), errors.New("exit 1")
+	}
+	if strings.Contains(s, "list-unit-files") {
+		return []byte(r.unitFiles), nil
 	}
 	if strings.Contains(s, "--property=UnitFileState") {
 		units := args
@@ -68,7 +72,7 @@ func TestStartAcceptsActiveServiceWithHistoricalRestarts(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.previousRestarts = true
-	if err := m.Action(context.Background(), "start", "admin", false); err != nil {
+	if err := m.Action(context.Background(), "start", "admin", ReadyCheck{}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -174,7 +178,7 @@ func TestUninstallProtectsUnmanagedFiles(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if m.Action(context.Background(), "uninstall", "admin", false) == nil {
+			if m.Action(context.Background(), "uninstall", "admin", ReadyCheck{}) == nil {
 				t.Fatal("uninstalled unmanaged service")
 			}
 			if len(r.calls) > 0 {
@@ -201,6 +205,9 @@ func TestActionsForExistingSystemServices(t *testing.T) {
 		want   []string
 	}{
 		{"status", "worker-alias.service", false, []string{"systemctl status --no-pager --full -- worker-alias.service"}},
+		{"show", "worker-alias.service", false, []string{"systemctl cat --no-pager -- worker-alias.service"}},
+		{"enable", "worker-alias", false, []string{"systemctl enable -- worker-alias.service"}},
+		{"disable", "worker-alias.service", false, []string{"systemctl disable -- worker-alias.service"}},
 		{"logs", "worker-alias", true, []string{
 			"systemctl show --property=Id -- worker-alias.service",
 			"journalctl --unit=worker.service --lines 50 --no-pager --follow",
@@ -211,7 +218,13 @@ func TestActionsForExistingSystemServices(t *testing.T) {
 	} {
 		t.Run(tt.action, func(t *testing.T) {
 			r.calls = nil
-			if err := m.Action(context.Background(), tt.action, tt.name, tt.follow); err != nil {
+			var err error
+			if tt.action == "logs" {
+				err = m.Logs(context.Background(), tt.name, LogOptions{Follow: tt.follow})
+			} else {
+				err = m.Action(context.Background(), tt.action, tt.name, ReadyCheck{})
+			}
+			if err != nil {
 				t.Fatal(err)
 			}
 			if !slices.Equal(r.calls, tt.want) {
@@ -224,12 +237,18 @@ func TestActionsForExistingSystemServices(t *testing.T) {
 func TestLogsUseRequestedUnitWhenIDLookupFails(t *testing.T) {
 	m, r := testManager(t)
 	r.fail = "--property=Id"
-	if err := m.Action(context.Background(), "logs", "worker.service", false); err != nil {
+	if err := m.Logs(context.Background(), "worker.service", LogOptions{Lines: 100, Since: "1 hour ago", Level: "err", Follow: true}); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"systemctl show --property=Id -- worker.service", "journalctl --unit=worker.service --lines 50 --no-pager"}
+	want := []string{
+		"systemctl show --property=Id -- worker.service",
+		"journalctl --unit=worker.service --lines 100 --no-pager --since=1 hour ago --priority=err --follow",
+	}
 	if !slices.Equal(r.calls, want) {
 		t.Fatalf("calls = %q, want %q", r.calls, want)
+	}
+	if m.Logs(context.Background(), "worker.service", LogOptions{Level: "invalid"}) == nil {
+		t.Fatal("accepted invalid log level")
 	}
 }
 
@@ -239,7 +258,7 @@ func TestStartStillChecksManagedServiceState(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.inactive = true
-	if err := m.Action(context.Background(), "start", "admin.service", false); err == nil {
+	if err := m.Action(context.Background(), "start", "admin.service", ReadyCheck{}); err == nil {
 		t.Fatal("reported failed managed service as started")
 	}
 }
@@ -250,12 +269,15 @@ func TestManageAndUninstall(t *testing.T) {
 	if err := m.Install(context.Background(), c); err != nil {
 		t.Fatal(err)
 	}
-	for _, action := range []string{"start", "stop", "restart", "status", "logs"} {
-		if err := m.Action(context.Background(), action, "admin", action == "logs"); err != nil {
+	for _, action := range []string{"start", "stop", "restart", "status", "show", "enable", "disable"} {
+		if err := m.Action(context.Background(), action, "admin", ReadyCheck{}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := m.Action(context.Background(), "uninstall", "admin", false); err != nil {
+	if err := m.Logs(context.Background(), "admin", LogOptions{Follow: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Action(context.Background(), "uninstall", "admin", ReadyCheck{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(c.Executable); err != nil {
@@ -291,7 +313,13 @@ func TestActionFailures(t *testing.T) {
 			if action == "logs" {
 				r.fail = "journalctl"
 			}
-			if m.Action(context.Background(), action, "admin", false) == nil {
+			var err error
+			if action == "logs" {
+				err = m.Logs(context.Background(), "admin", LogOptions{})
+			} else {
+				err = m.Action(context.Background(), action, "admin", ReadyCheck{})
+			}
+			if err == nil {
 				t.Fatal("lost error")
 			}
 			if _, err := os.Stat(filepath.Join(m.UnitDir, "admin.service")); err != nil {
@@ -327,7 +355,86 @@ func TestInstallRejectsSymlinkAndInvalidConfig(t *testing.T) {
 	if len(r.calls) != 0 {
 		t.Fatal(r.calls)
 	}
-	if m.Action(context.Background(), "stop", "../bad", false) == nil {
+	if m.Action(context.Background(), "stop", "../bad", ReadyCheck{}) == nil {
 		t.Fatal("accepted name")
+	}
+}
+
+func TestInstallReplaceAndRollback(t *testing.T) {
+	m, r := testManager(t)
+	c := testConfig(t)
+	c.Description = "v1"
+	if err := m.Install(context.Background(), c); err != nil {
+		t.Fatal(err)
+	}
+	orig, err := os.ReadFile(filepath.Join(m.UnitDir, "admin.service"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Replace succeeds and restarts the unit.
+	r.calls = nil
+	c.Replace = true
+	c.Description = "v2"
+	if err := m.Install(context.Background(), c); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := os.ReadFile(filepath.Join(m.UnitDir, "admin.service"))
+	if err != nil || !strings.Contains(string(updated), "Description=v2") {
+		t.Fatalf("replace did not update unit: %v\n%s", err, updated)
+	}
+	if !strings.Contains(strings.Join(r.calls, "\n"), "systemctl restart admin.service") {
+		t.Fatalf("replace did not restart unit: %v", r.calls)
+	}
+	// Failed replace restores previous unit content.
+	r.calls = nil
+	r.inactive = true
+	c.Description = "v3-bad"
+	if err := m.Install(context.Background(), c); err == nil {
+		t.Fatal("expected failed replace to return error")
+	}
+	restored, err := os.ReadFile(filepath.Join(m.UnitDir, "admin.service"))
+	if err != nil || string(restored) != string(updated) {
+		t.Fatalf("failed replace did not restore previous unit:\ngot:\n%s\nwant:\n%s", restored, updated)
+	}
+	// Replace refuses unmanaged foreign units.
+	r.inactive = false
+	foreignPath := filepath.Join(m.UnitDir, "foreign.service")
+	if err := os.WriteFile(foreignPath, []byte("[Service]\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	c.Name = "foreign"
+	if err := m.Install(context.Background(), c); err == nil {
+		t.Fatal("replace overwrote unmanaged unit")
+	}
+	_ = orig
+}
+
+func TestInstallNoEnableAndNoStart(t *testing.T) {
+	for _, tt := range []struct {
+		name              string
+		noEnable, noStart bool
+		wantCall          string
+		forbidCall        string
+	}{
+		{"no-enable only", true, false, "systemctl start admin.service", "systemctl enable"},
+		{"no-start only", false, true, "systemctl enable admin.service", "ActiveState"},
+		{"no-enable and no-start", true, true, "systemctl daemon-reload", "systemctl enable"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			m, r := testManager(t)
+			c := testConfig(t)
+			c.NoEnable = tt.noEnable
+			c.NoStart = tt.noStart
+			if err := m.Install(context.Background(), c); err != nil {
+				t.Fatal(err)
+			}
+			joined := strings.Join(r.calls, "\n")
+			if !strings.Contains(joined, tt.wantCall) {
+				t.Fatalf("missing %q in:\n%s", tt.wantCall, joined)
+			}
+			if strings.Contains(joined, tt.forbidCall) {
+				t.Fatalf("unexpected %q in:\n%s", tt.forbidCall, joined)
+			}
+		})
 	}
 }

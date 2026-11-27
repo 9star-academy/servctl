@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/9star-academy/servctl/internal/systemd"
 )
@@ -18,17 +19,29 @@ import (
 type fakeBackend struct {
 	config       systemd.Config
 	action, name string
-	follow       bool
+	logOpts      systemd.LogOptions
+	listOpts     systemd.ListOptions
+	readyOpts    systemd.ReadyCheck
 	listed       bool
 	err          error
 }
 
 func (b *fakeBackend) Install(_ context.Context, c systemd.Config) error { b.config = c; return b.err }
-func (b *fakeBackend) List(context.Context) error                        { b.listed = true; return b.err }
-func (b *fakeBackend) Action(_ context.Context, a, n string, f bool) error {
+func (b *fakeBackend) List(_ context.Context, opts systemd.ListOptions) error {
+	b.listed = true
+	b.listOpts = opts
+	return b.err
+}
+func (b *fakeBackend) Action(_ context.Context, a, n string, ready systemd.ReadyCheck) error {
 	b.action = a
 	b.name = n
-	b.follow = f
+	b.readyOpts = ready
+	return b.err
+}
+func (b *fakeBackend) Logs(_ context.Context, n string, opts systemd.LogOptions) error {
+	b.action = "logs"
+	b.name = n
+	b.logOpts = opts
 	return b.err
 }
 func testApp(t *testing.T) (*App, *fakeBackend, *bytes.Buffer) {
@@ -108,7 +121,7 @@ func TestActionsAndBackendErrors(t *testing.T) {
 		if a.Run(context.Background(), args) != 0 {
 			t.Fatal(out.String())
 		}
-		if b.action != action || b.name != "admin" || b.follow != (action == "logs") {
+		if b.action != action || b.name != "admin" || b.logOpts.Follow != (action == "logs") {
 			t.Fatal(b)
 		}
 		b.err = errors.New("failed")
@@ -190,7 +203,7 @@ func TestListIsReadOnlyAndNeedsNoName(t *testing.T) {
 }
 
 func TestListRejectsArguments(t *testing.T) {
-	for _, args := range [][]string{{"list", "admin"}, {"list", "--follow"}, {"list", "--all"}} {
+	for _, args := range [][]string{{"list", "admin"}, {"list", "--follow"}, {"list", "--unknown"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			a, b, _ := testApp(t)
 			if a.Run(context.Background(), args) == 0 {
@@ -316,5 +329,111 @@ func TestLogsFollowCtrlCExitsSilently(t *testing.T) {
 	}
 	if out.Len() != 0 {
 		t.Fatalf("unexpected error noise on logs --follow cancel: %q", out.String())
+	}
+}
+
+func TestInstallOptionalFlags(t *testing.T) {
+	a, b, out := testApp(t)
+	code := a.Run(context.Background(), []string{
+		"install", "admin",
+		"--exec", "./admin",
+		"--user", "ubuntu",
+		"--env", "A=1",
+		"--env", "B=2",
+		"--env-file", "./.env",
+		"--desc", "Admin API",
+		"--restart", "always",
+		"--restart-sec", "5s",
+		"--memory-max", "512M",
+		"--cpu-quota", "150%",
+		"--after", "postgresql.service",
+		"--after", "redis",
+		"--no-enable",
+		"--no-start",
+	})
+	if code != 0 {
+		t.Fatal(out.String())
+	}
+	c := b.config
+	if strings.Join(c.Env, ",") != "A=1,B=2" ||
+		len(c.EnvFiles) != 1 || c.EnvFiles[0] != filepath.Join(a.Cwd, ".env") ||
+		c.Description != "Admin API" || c.Restart != "always" || c.RestartSec != "5s" ||
+		c.MemoryMax != "512M" || c.CPUQuota != "150%" ||
+		strings.Join(c.After, ",") != "postgresql.service,redis" ||
+		!c.NoEnable || !c.NoStart {
+		t.Fatalf("unexpected config: %+v", c)
+	}
+}
+
+func TestLogsOptionsFlags(t *testing.T) {
+	a, b, out := testApp(t)
+	if code := a.Run(context.Background(), []string{"logs", "admin", "-f", "-n", "120", "--since", "1 hour ago", "--level", "err"}); code != 0 {
+		t.Fatal(out.String())
+	}
+	if !b.logOpts.Follow || b.logOpts.Lines != 120 || b.logOpts.Since != "1 hour ago" || b.logOpts.Level != "err" {
+		t.Fatalf("unexpected log opts: %+v", b.logOpts)
+	}
+	for _, bad := range [][]string{
+		{"logs", "admin", "--lines", "0"},
+		{"logs", "admin", "-n", "-5"},
+		{"logs", "admin", "--level", "verbose"},
+	} {
+		a, b, _ := testApp(t)
+		if a.Run(context.Background(), bad) == 0 || b.action != "" {
+			t.Fatalf("accepted invalid logs args %q", bad)
+		}
+	}
+}
+
+func TestShowEnableDisableListAndReadyFlags(t *testing.T) {
+	// show is read-only (no root required).
+	a, b, out := testApp(t)
+	a.EUID = 1000
+	if code := a.Run(context.Background(), []string{"show", "nginx.service"}); code != 0 || b.action != "show" || b.name != "nginx.service" {
+		t.Fatalf("show failed: code=%d b=%+v out=%s", code, b, out.String())
+	}
+
+	// enable / disable require root and work with root.
+	for _, act := range []string{"enable", "disable"} {
+		a, b, _ = testApp(t)
+		a.EUID = 1000
+		if a.Run(context.Background(), []string{act, "admin"}) == 0 || b.action != "" {
+			t.Fatalf("%s accepted non-root", act)
+		}
+		a.EUID = 0
+		if a.Run(context.Background(), []string{act, "admin"}) != 0 || b.action != act {
+			t.Fatalf("%s failed with root", act)
+		}
+	}
+
+	// list --json --all --failed
+	a, b, out = testApp(t)
+	a.EUID = 1000
+	if code := a.Run(context.Background(), []string{"list", "--json", "--all", "--failed"}); code != 0 {
+		t.Fatal(out.String())
+	}
+	if !b.listed || !b.listOpts.JSON || !b.listOpts.All || !b.listOpts.Failed {
+		t.Fatalf("unexpected listOpts: %+v", b.listOpts)
+	}
+
+	// install --replace + ready checks
+	a, b, out = testApp(t)
+	if code := a.Run(context.Background(), []string{
+		"install", "admin", "--replace", "--exec", "./app", "--user", "ubuntu",
+		"--wait-port", "8200", "--health-url", "http://127.0.0.1:8200/health", "--ready-timeout", "30s",
+	}); code != 0 {
+		t.Fatal(out.String())
+	}
+	if !b.config.Replace || b.config.Ready.WaitPort != 8200 || b.config.Ready.HealthURL != "http://127.0.0.1:8200/health" || b.config.Ready.Timeout != 30*time.Second {
+		t.Fatalf("unexpected replace/ready config: %+v", b.config)
+	}
+
+	// restart with ready check
+	a, b, out = testApp(t)
+	if code := a.Run(context.Background(), []string{"restart", "admin", "--wait-port", "8200", "--health-url", "http://127.0.0.1:8200/health"}); code != 0 {
+		t.Fatal(out.String())
+	}
+	if b.action != "restart" || b.readyOpts.WaitPort != 8200 || b.readyOpts.HealthURL != "http://127.0.0.1:8200/health" {
+		t.Fatalf("unexpected restart ready opts: %+v", b.readyOpts)
 	}
 }

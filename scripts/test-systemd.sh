@@ -67,12 +67,16 @@ work="$scratch/app % \$ space /run"
 mkdir -p "$work"
 chown "$run_user" "$work"
 program="$work/my % \$ executable"
+env_file="$scratch/app.env"
+printf 'FROM_ENV_FILE=hello-file\n' > "$env_file"
+chmod 0600 "$env_file"
 cat > "$program" <<'EOF'
 #!/bin/sh
 set -eu
 id -un > identity
 pwd > cwd
 printf '%s\0' "$@" > args
+printf '%s|%s\n' "${INLINE_ENV:-}" "${FROM_ENV_FILE:-}" > env_check
 echo 'servctl smoke application started'
 exec sleep 300
 EOF
@@ -84,19 +88,28 @@ if "$binary" install "$bad" --exec "$program" --workdir "${work%/run}" --user "$
   echo 'Accepted a working directory ending in a space' >&2; exit 1
 fi
 [[ ! -e /etc/systemd/system/$bad.service ]]
-"$binary" install "$name" --exec "$program" --workdir "$work" --user "$run_user" -- "${args[@]}"
+"$binary" install "$name" --exec "$program" --workdir "$work" --user "$run_user" \
+  --env 'INLINE_ENV=hello inline' --env-file "$env_file" \
+  --desc 'servctl smoke test' --memory-max 256M -- "${args[@]}"
 systemctl is-active --quiet "$name.service"
 systemctl is-enabled --quiet "$name.service"
 assert_list_row "$name" active enabled 0
 [[ $(cat "$work/identity") == "$run_user" ]]
 [[ $(cat "$work/cwd") == "$work" ]]
+[[ $(cat "$work/env_check") == 'hello inline|hello-file' ]]
 printf '%s\0' "${args[@]}" > "$scratch/expected"
 cmp "$scratch/expected" "$work/args"
 "$binary" status "$name"
-"$binary" logs "$name"
+"$binary" show "$name" | grep -q 'Description=servctl smoke test'
+"$binary" logs "$name" -n 20 --since '5 minutes ago'
+"$binary" list --json | grep -q "\"name\": \"$name\""
 if "$binary" install "$name" --exec "$program" --workdir "$work" --user "$run_user"; then
   echo 'Overwrote an existing unit' >&2; exit 1
 fi
+"$binary" install "$name" --replace --exec "$program" --workdir "$work" --user "$run_user" \
+  --env 'INLINE_ENV=hello inline' --env-file "$env_file" \
+  --desc 'servctl smoke replaced' --memory-max 256M -- "${args[@]}"
+"$binary" show "$name" | grep -q 'Description=servctl smoke replaced'
 # Crash recovery must change the process PID without a manual start.
 old_pid=$(systemctl show --property=MainPID --value "$name.service")
 systemctl kill --kill-who=main --signal=KILL "$name.service"
@@ -114,9 +127,9 @@ assert_list_row "$name" active enabled 1
 "$binary" stop "$name"
 if systemctl is-active --quiet "$name.service"; then exit 1; fi
 assert_list_row "$name" inactive enabled
-systemctl disable "$name.service"
+"$binary" disable "$name"
 assert_list_row "$name" inactive disabled
-systemctl enable "$name.service"
+"$binary" enable "$name"
 "$binary" start "$name"
 "$binary" uninstall "$name"
 [[ ! -e /etc/systemd/system/$name.service && -f $program ]]
